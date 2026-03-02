@@ -1,5 +1,5 @@
 {
-  "name": "viewer-on-tauri",
+  "name": "image-viewer-on-tauri",
   "version": "0.1.0",
   "description": "Tauri image viewer built with Svelte",
   "type": "module",
