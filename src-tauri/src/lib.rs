@@ -204,11 +204,11 @@ fn handle_file_drop(
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run(context: tauri::Context<tauri::Wry>) {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ExtractState::default())
-    .invoke_handler(tauri::generate_handler![extract_archive, handle_file_drop])
-        .run(tauri::generate_context!())
+        .invoke_handler(tauri::generate_handler![extract_archive, handle_file_drop])
+        .run(context)
         .expect("error while running tauri application");
 }

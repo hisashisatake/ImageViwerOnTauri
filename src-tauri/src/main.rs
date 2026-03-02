@@ -2,5 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    c_userssatakeappdatalocaltemptauri_svelte_app_lib::run()
+    let context = tauri::generate_context!("tauri.conf.json");
+    c_userssatakeappdatalocaltemptauri_svelte_app_lib::run(context)
 }
