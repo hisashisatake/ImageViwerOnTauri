@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { onDestroy, onMount } from "svelte";
   import "./page.css";
 
   type ImageItem = {
@@ -8,6 +10,13 @@
     size: number;
     type: string;
     lastModified: number;
+    source: "blob" | "file";
+  };
+
+  type ExtractedFile = {
+    path: string;
+    name: string;
+    size: number;
   };
 
   let images = $state<ImageItem[]>([]);
@@ -16,20 +25,101 @@
   let fitToWindow = $state(true);
   let isDragging = $state(false);
   let fileInput: HTMLInputElement | null = null;
+  let isLoading = $state(false);
+  let statusMessage = $state("");
+  let errorMessage = $state("");
+  let dragCounter = 0;
 
-  function addFiles(fileList: FileList | null) {
+  function isArchiveFile(file: File) {
+    const lowerName = file.name.toLowerCase();
+    return (
+      file.type === "application/zip" ||
+      lowerName.endsWith(".zip") ||
+      lowerName.endsWith(".cbz")
+    );
+  }
+
+  async function extractArchive(file: File): Promise<ImageItem[]> {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const extracted = await invoke<ExtractedFile[]>("extract_archive", {
+      archiveName: file.name,
+      bytes,
+    });
+    return extracted.map((item) => ({
+      name: item.name,
+      url: convertFileSrc(item.path),
+      size: item.size,
+      type: "image/*",
+      lastModified: Date.now(),
+      source: "file",
+    }));
+  }
+
+  async function addDroppedPaths(paths: string[]) {
+    if (!paths.length) return;
+    isLoading = true;
+    statusMessage = "";
+    errorMessage = "";
+
+    try {
+      const extracted = await invoke<ExtractedFile[]>("handle_file_drop", { paths });
+      const newItems = extracted.map((item) => ({
+        name: item.name,
+        url: convertFileSrc(item.path),
+        size: item.size,
+        type: "image/*",
+        lastModified: Date.now(),
+        source: "file" as const,
+      }));
+      if (newItems.length) {
+        images = [...images, ...newItems];
+        if (images.length === newItems.length) {
+          currentIndex = 0;
+        }
+      }
+    } catch (error) {
+      console.error(error);
+      errorMessage = "Failed to read dropped files.";
+    } finally {
+      isLoading = false;
+      statusMessage = "";
+    }
+  }
+
+  async function addFiles(fileList: FileList | null) {
     if (!fileList) return;
     const newItems: ImageItem[] = [];
 
-    for (const file of Array.from(fileList)) {
-      if (!file.type.startsWith("image/")) continue;
-      newItems.push({
-        name: file.name,
-        url: URL.createObjectURL(file),
-        size: file.size,
-        type: file.type,
-        lastModified: file.lastModified,
-      });
+    isLoading = true;
+    statusMessage = "";
+    errorMessage = "";
+
+    try {
+      for (const file of Array.from(fileList)) {
+        if (file.type.startsWith("image/")) {
+          newItems.push({
+            name: file.name,
+            url: URL.createObjectURL(file),
+            size: file.size,
+            type: file.type,
+            lastModified: file.lastModified,
+            source: "blob",
+          });
+          continue;
+        }
+
+        if (isArchiveFile(file)) {
+          statusMessage = `Extracting ${file.name}...`;
+          const extracted = await extractArchive(file);
+          newItems.push(...extracted);
+        }
+      }
+    } catch (error) {
+      console.error(error);
+      errorMessage = "Failed to extract archive.";
+    } finally {
+      isLoading = false;
+      statusMessage = "";
     }
 
     if (!newItems.length) return;
@@ -39,31 +129,55 @@
     }
   }
 
-  function handleFileChange(event: Event) {
+  async function handleFileChange(event: Event) {
     const input = event.currentTarget as HTMLInputElement;
-    addFiles(input.files);
+    await addFiles(input.files);
     input.value = "";
   }
 
-  function handleDrop(event: DragEvent) {
+  async function handleDrop(event: DragEvent) {
     event.preventDefault();
     isDragging = false;
-    addFiles(event.dataTransfer?.files ?? null);
+    await addFiles(event.dataTransfer?.files ?? null);
   }
 
   function handleDragOver(event: DragEvent) {
     event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+    isDragging = true;
+  }
+
+  function handleDragEnter(event: DragEvent) {
+    event.preventDefault();
+    dragCounter += 1;
     isDragging = true;
   }
 
   function handleDragLeave(event: DragEvent) {
     event.preventDefault();
+    dragCounter = Math.max(0, dragCounter - 1);
+    if (dragCounter === 0) {
+      isDragging = false;
+    }
+  }
+
+  async function handleWindowDrop(event: DragEvent) {
+    event.preventDefault();
+    dragCounter = 0;
     isDragging = false;
+    const files = event.dataTransfer?.files ?? null;
+    if (files && files.length) {
+      await addFiles(files);
+    }
   }
 
   function clearImages() {
     for (const image of images) {
-      URL.revokeObjectURL(image.url);
+      if (image.source === "blob") {
+        URL.revokeObjectURL(image.url);
+      }
     }
     images = [];
     currentIndex = 0;
@@ -112,8 +226,48 @@
 
   onDestroy(() => {
     for (const image of images) {
-      URL.revokeObjectURL(image.url);
+      if (image.source === "blob") {
+        URL.revokeObjectURL(image.url);
+      }
     }
+  });
+
+  onMount(() => {
+    const preventDefaults = (event: DragEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("dragover", preventDefaults);
+    window.addEventListener("drop", handleWindowDrop);
+    window.addEventListener("dragenter", handleDragEnter);
+    window.addEventListener("dragleave", handleDragLeave);
+    let unlistenDragDrop: (() => void) | null = null;
+    getCurrentWindow()
+      .onDragDropEvent(async (event) => {
+        const payload = event.payload;
+        if (payload.type === "over") {
+          isDragging = true;
+          return;
+        }
+        if (payload.type === "drop") {
+          dragCounter = 0;
+          isDragging = false;
+          await addDroppedPaths(payload.paths ?? []);
+          return;
+        }
+        dragCounter = 0;
+        isDragging = false;
+      })
+      .then((fn) => {
+        unlistenDragDrop = fn;
+      });
+
+    return () => {
+      window.removeEventListener("dragover", preventDefaults);
+      window.removeEventListener("drop", handleWindowDrop);
+      window.removeEventListener("dragenter", handleDragEnter);
+      window.removeEventListener("dragleave", handleDragLeave);
+      unlistenDragDrop?.();
+    };
   });
 </script>
 
@@ -129,7 +283,7 @@
           bind:this={fileInput}
           type="file"
           multiple
-          accept="image/*"
+          accept="image/*,.zip,application/zip"
           onchange={handleFileChange}
         />
         Add Images
@@ -146,6 +300,7 @@
     aria-label="Image dropzone. Click to open file picker."
     onclick={openPicker}
     onkeydown={handleDropzoneKey}
+    ondragenter={handleDragEnter}
     ondragover={handleDragOver}
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
@@ -153,15 +308,65 @@
     {#if images.length}
       <div class="viewer">
         <div class="viewer-toolbar">
-          <button class="button" onclick={prevImage} disabled={currentIndex === 0}>Prev</button>
+          <button
+            class="button"
+            onclick={(event) => {
+              event.stopPropagation();
+              prevImage();
+            }}
+            disabled={currentIndex === 0}
+          >
+            Prev
+          </button>
           <span class="counter">{currentIndex + 1} / {images.length}</span>
-          <button class="button" onclick={nextImage} disabled={currentIndex === images.length - 1}>Next</button>
+          <button
+            class="button"
+            onclick={(event) => {
+              event.stopPropagation();
+              nextImage();
+            }}
+            disabled={currentIndex === images.length - 1}
+          >
+            Next
+          </button>
           <div class="spacer"></div>
-          <button class="button" onclick={zoomOut}>-</button>
+          <button
+            class="button"
+            onclick={(event) => {
+              event.stopPropagation();
+              zoomOut();
+            }}
+          >
+            -
+          </button>
           <span class="zoom">{Math.round(zoom * 100)}%</span>
-          <button class="button" onclick={zoomIn}>+</button>
-          <button class="button" onclick={resetZoom}>Reset</button>
-          <button class="button" onclick={toggleFit}>{fitToWindow ? "Actual Size" : "Fit"}</button>
+          <button
+            class="button"
+            onclick={(event) => {
+              event.stopPropagation();
+              zoomIn();
+            }}
+          >
+            +
+          </button>
+          <button
+            class="button"
+            onclick={(event) => {
+              event.stopPropagation();
+              resetZoom();
+            }}
+          >
+            Reset
+          </button>
+          <button
+            class="button"
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleFit();
+            }}
+          >
+            {fitToWindow ? "Actual Size" : "Fit"}
+          </button>
         </div>
         <div class="canvas">
           {#if images[currentIndex]}
@@ -181,7 +386,12 @@
     {:else}
       <div class="empty">
         <p>Drop image files here.</p>
-        <p>Supported: png, jpg, webp, gif, svg.</p>
+        <p>Supported: png, jpg, webp, gif, svg, zip.</p>
+        {#if isLoading}
+          <p>{statusMessage || "Loading..."}</p>
+        {:else if errorMessage}
+          <p>{errorMessage}</p>
+        {/if}
       </div>
     {/if}
   </div>
