@@ -1,7 +1,214 @@
+use serde::Serialize;
+use std::{
+    fs,
+    io::Cursor,
+    path::{Path, PathBuf},
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tauri::{command, State};
+use zip::ZipArchive;
+
+#[derive(Default)]
+struct ExtractState {
+    last_temp_dir: Mutex<Option<PathBuf>>,
+}
+
+#[derive(Serialize)]
+struct ExtractedFile {
+    path: String,
+    name: String,
+    size: u64,
+}
+
+fn sanitize_name(name: &str) -> String {
+    let mut sanitized = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            sanitized.push(ch);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    if sanitized.is_empty() {
+        "archive".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn is_supported_image(path: &Path) -> bool {
+    let ext = if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
+        ext.to_ascii_lowercase()
+    } else {
+        return false;
+    };
+    return matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" | "bmp" | "avif"
+    );
+}
+
+fn is_supported_archive(path: &Path) -> bool {
+    let ext = if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
+        ext.to_ascii_lowercase()
+    } else {
+        return false;
+    };
+    return matches!(ext.as_str(), "zip" | "cbz");
+}
+
+fn clear_last_temp_dir(state: &State<ExtractState>) -> Result<(), String> {
+    let mut last_dir_guard = state
+        .last_temp_dir
+        .lock()
+        .map_err(|_| "Failed to lock state".to_string())?;
+    if let Some(prev_dir) = last_dir_guard.take() {
+        let _ = fs::remove_dir_all(prev_dir);
+    }
+    Ok(())
+}
+
+fn create_extract_dir(state: &State<ExtractState>, archive_name: &str) -> Result<PathBuf, String> {
+    let temp_root = std::env::temp_dir().join("viewer-on-tauri");
+    fs::create_dir_all(&temp_root)
+        .map_err(|err| format!("Failed to create temp root: {err}"))?;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| format!("Failed to read system time: {err}"))?
+        .as_millis();
+    let safe_name = sanitize_name(archive_name);
+    let extract_dir = temp_root.join(format!("{timestamp}-{safe_name}"));
+    fs::create_dir_all(&extract_dir)
+        .map_err(|err| format!("Failed to create temp dir: {err}"))?;
+
+    let mut last_dir_guard = state
+        .last_temp_dir
+        .lock()
+        .map_err(|_| "Failed to lock state".to_string())?;
+    *last_dir_guard = Some(extract_dir.clone());
+    Ok(extract_dir)
+}
+
+fn extract_archive_bytes(bytes: Vec<u8>, extract_dir: &Path) -> Result<Vec<ExtractedFile>, String> {
+    let reader = Cursor::new(bytes);
+    let mut archive = ZipArchive::new(reader)
+        .map_err(|err| format!("Invalid archive: {err}"))?;
+    let mut extracted = Vec::new();
+
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|err| format!("Failed to read archive entry: {err}"))?;
+
+        if file.is_dir() {
+            continue;
+        }
+
+        let Some(enclosed) = file.enclosed_name().map(|path| path.to_owned()) else {
+            continue;
+        };
+        if !is_supported_image(&enclosed) {
+            continue;
+        }
+
+        let out_path = extract_dir.join(&enclosed);
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| format!("Failed to create output dir: {err}"))?;
+        }
+
+        let mut outfile = fs::File::create(&out_path)
+            .map_err(|err| format!("Failed to create file: {err}"))?;
+        std::io::copy(&mut file, &mut outfile)
+            .map_err(|err| format!("Failed to extract file: {err}"))?;
+
+        extracted.push(ExtractedFile {
+            path: out_path.to_string_lossy().to_string(),
+            name: enclosed
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "image".to_string()),
+            size: file.size(),
+        });
+    }
+
+    Ok(extracted)
+}
+
+#[command]
+fn extract_archive(
+    state: State<ExtractState>,
+    archive_name: String,
+    bytes: Vec<u8>,
+) -> Result<Vec<ExtractedFile>, String> {
+    clear_last_temp_dir(&state)?;
+    let extract_dir = create_extract_dir(&state, &archive_name)?;
+    let mut extracted = extract_archive_bytes(bytes, &extract_dir)?;
+    extracted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(extracted)
+}
+
+#[command]
+fn handle_file_drop(
+    state: State<ExtractState>,
+    paths: Vec<String>,
+) -> Result<Vec<ExtractedFile>, String> {
+    clear_last_temp_dir(&state)?;
+    let mut extracted = Vec::new();
+    let mut archive_dir: Option<PathBuf> = None;
+
+    for path_str in paths {
+        let path = PathBuf::from(&path_str);
+        if !path.is_file() {
+            continue;
+        }
+
+        if is_supported_image(&path) {
+            let metadata = fs::metadata(&path)
+                .map_err(|err| format!("Failed to read metadata: {err}"))?;
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "image".to_string());
+            extracted.push(ExtractedFile {
+                path: path.to_string_lossy().to_string(),
+                name,
+                size: metadata.len(),
+            });
+            continue;
+        }
+
+        if is_supported_archive(&path) {
+            let bytes = fs::read(&path)
+                .map_err(|err| format!("Failed to read archive: {err}"))?;
+            let dir = if let Some(existing) = &archive_dir {
+                existing.clone()
+            } else {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "archive".to_string());
+                let new_dir = create_extract_dir(&state, &name)?;
+                archive_dir = Some(new_dir.clone());
+                new_dir
+            };
+            let mut archive_items = extract_archive_bytes(bytes, &dir)?;
+            extracted.append(&mut archive_items);
+        }
+    }
+
+    extracted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(extracted)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(ExtractState::default())
+    .invoke_handler(tauri::generate_handler![extract_archive, handle_file_drop])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
