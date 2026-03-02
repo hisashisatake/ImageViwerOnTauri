@@ -224,6 +224,37 @@
     }
   }
 
+  function handleGlobalKey(event: KeyboardEvent) {
+    const target = event.target as HTMLElement | null;
+    const tag = target?.tagName?.toLowerCase();
+    if (tag === "input" || tag === "textarea" || target?.isContentEditable) {
+      return;
+    }
+
+    switch (event.key) {
+      case "ArrowLeft":
+        event.preventDefault();
+        prevImage();
+        break;
+      case "ArrowRight":
+        event.preventDefault();
+        nextImage();
+        break;
+      case "Home":
+        event.preventDefault();
+        currentIndex = 0;
+        break;
+      case "End":
+        event.preventDefault();
+        if (images.length) {
+          currentIndex = images.length - 1;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
   onDestroy(() => {
     for (const image of images) {
       if (image.source === "blob") {
@@ -240,6 +271,7 @@
     window.addEventListener("drop", handleWindowDrop);
     window.addEventListener("dragenter", handleDragEnter);
     window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("keydown", handleGlobalKey);
     let unlistenDragDrop: (() => void) | null = null;
     getCurrentWindow()
       .onDragDropEvent(async (event) => {
@@ -266,6 +298,7 @@
       window.removeEventListener("drop", handleWindowDrop);
       window.removeEventListener("dragenter", handleDragEnter);
       window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("keydown", handleGlobalKey);
       unlistenDragDrop?.();
     };
   });
