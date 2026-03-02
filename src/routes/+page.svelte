@@ -305,6 +305,12 @@
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
   >
+    {#if isLoading}
+      <div class="loading-overlay" role="status" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <span>{statusMessage || "Loading..."}</span>
+      </div>
+    {/if}
     {#if images.length}
       <div class="viewer">
         <div class="viewer-toolbar">
@@ -387,9 +393,7 @@
       <div class="empty">
         <p>Drop image files here.</p>
         <p>Supported: png, jpg, webp, gif, svg, zip.</p>
-        {#if isLoading}
-          <p>{statusMessage || "Loading..."}</p>
-        {:else if errorMessage}
+        {#if errorMessage}
           <p>{errorMessage}</p>
         {/if}
       </div>

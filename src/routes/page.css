@@ -78,6 +78,7 @@ body {
   justify-content: center;
   min-height: 60vh;
   transition: border-color 0.2s ease, background 0.2s ease;
+  position: relative;
 }
 
 .dropzone.dragging {
@@ -146,4 +147,35 @@ body {
 
 .empty p {
   margin: 6px 0;
+}
+
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(13, 15, 20, 0.7);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #eef2f7;
+  font-weight: 600;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.spinner {
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  border: 4px solid rgba(255, 255, 255, 0.2);
+  border-top-color: #3b82f6;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
