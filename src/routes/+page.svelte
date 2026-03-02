@@ -2,6 +2,7 @@
   import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onDestroy, onMount } from "svelte";
+  import PageView from "./page.view.svelte";
   import "./page.css";
 
   type ImageItem = {
@@ -24,7 +25,7 @@
   let zoom = $state(1);
   let fitToWindow = $state(true);
   let isDragging = $state(false);
-  let fileInput: HTMLInputElement | null = null;
+  let fileInput = $state<HTMLInputElement | null>(null);
   let isLoading = $state(false);
   let statusMessage = $state("");
   let errorMessage = $state("");
@@ -304,132 +305,28 @@
   });
 </script>
 
-<main class="app">
-  <header class="toolbar">
-    <div>
-      <h1>Image Viewer</h1>
-      <p>Drag & drop images or use the picker.</p>
-    </div>
-    <div class="actions">
-      <label class="button primary">
-        <input
-          bind:this={fileInput}
-          type="file"
-          multiple
-          accept="image/*,.zip,application/zip"
-          onchange={handleFileChange}
-        />
-        Add Images
-      </label>
-      <button class="button" onclick={clearImages} disabled={!images.length}>Clear</button>
-    </div>
-  </header>
-
-  <div
-    class:dragging={isDragging}
-    class="dropzone"
-    role="button"
-    tabindex="0"
-    aria-label="Image dropzone. Click to open file picker."
-    onclick={openPicker}
-    onkeydown={handleDropzoneKey}
-    ondragenter={handleDragEnter}
-    ondragover={handleDragOver}
-    ondragleave={handleDragLeave}
-    ondrop={handleDrop}
-  >
-    {#if isLoading}
-      <div class="loading-overlay" role="status" aria-live="polite">
-        <div class="spinner" aria-hidden="true"></div>
-        <span>{statusMessage || "Loading..."}</span>
-      </div>
-    {/if}
-    {#if images.length}
-      <div class="viewer">
-        <div class="viewer-toolbar">
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              prevImage();
-            }}
-            disabled={currentIndex === 0}
-          >
-            Prev
-          </button>
-          <span class="counter">{currentIndex + 1} / {images.length}</span>
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              nextImage();
-            }}
-            disabled={currentIndex === images.length - 1}
-          >
-            Next
-          </button>
-          <div class="spacer"></div>
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              zoomOut();
-            }}
-          >
-            -
-          </button>
-          <span class="zoom">{Math.round(zoom * 100)}%</span>
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              zoomIn();
-            }}
-          >
-            +
-          </button>
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              resetZoom();
-            }}
-          >
-            Reset
-          </button>
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              toggleFit();
-            }}
-          >
-            {fitToWindow ? "Actual Size" : "Fit"}
-          </button>
-        </div>
-        <div class="canvas">
-          {#if images[currentIndex]}
-            <img
-              src={images[currentIndex].url}
-              alt={images[currentIndex].name}
-              class:fit={fitToWindow}
-              style={!fitToWindow ? `transform: scale(${zoom});` : ""}
-            />
-          {/if}
-        </div>
-        <div class="meta">
-          <span>{images[currentIndex].name}</span>
-          <span>{Math.round(images[currentIndex].size / 1024)} KB</span>
-        </div>
-      </div>
-    {:else}
-      <div class="empty">
-        <p>Drop image files here.</p>
-        <p>Supported: png, jpg, webp, gif, svg, zip.</p>
-        {#if errorMessage}
-          <p>{errorMessage}</p>
-        {/if}
-      </div>
-    {/if}
-  </div>
-</main>
+<PageView
+  bind:fileInput
+  bind:zoom
+  {images}
+  {currentIndex}
+  {fitToWindow}
+  {isDragging}
+  {isLoading}
+  {statusMessage}
+  {errorMessage}
+  {handleFileChange}
+  {clearImages}
+  {openPicker}
+  {handleDropzoneKey}
+  {handleDragEnter}
+  {handleDragOver}
+  {handleDragLeave}
+  {handleDrop}
+  {prevImage}
+  {nextImage}
+  {zoomIn}
+  {zoomOut}
+  {resetZoom}
+  {toggleFit}
+/>
