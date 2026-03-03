@@ -44,9 +44,13 @@
     if (!fitToWindow) return;
     if (!canvasEl || !imgEl) return;
     if (!imgEl.naturalHeight) return;
-    const canvasHeight = canvasEl.getBoundingClientRect().height;
-    if (!canvasHeight) return;
-    const nextZoom = canvasHeight / imgEl.naturalHeight;
+    const canvasRect = canvasEl.getBoundingClientRect();
+    const canvasHeight = canvasRect.height;
+    const canvasWidth = canvasRect.width;
+    if (!canvasHeight || !canvasWidth) return;
+    const heightZoom = canvasHeight / imgEl.naturalHeight;
+    const widthZoom = canvasWidth / imgEl.naturalWidth;
+    const nextZoom = Math.min(heightZoom, widthZoom);
     zoom = Number(nextZoom.toFixed(4));
   }
 
