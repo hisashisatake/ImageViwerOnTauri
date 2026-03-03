@@ -22,7 +22,6 @@
   export let imageReloadKey: boolean;
 
   export let handleFileChange: (event: Event) => void | Promise<void>;
-  export let clearImages: () => void;
   export let openPicker: () => void;
   export let handleDropzoneKey: (event: KeyboardEvent) => void;
   export let handleDragEnter: (event: DragEvent) => void;
@@ -39,6 +38,7 @@
   let canvasEl: HTMLDivElement | null = null;
   let imgEl: HTMLImageElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
+  let isFabOpen = false;
 
   function updateFitZoom() {
     if (!fitToWindow) return;
@@ -72,29 +72,17 @@
   $: if (fitToWindow && images[currentIndex]) {
     updateFitZoom();
   }
+
+  function toggleFab() {
+    isFabOpen = !isFabOpen;
+  }
+
+  function closeFab() {
+    isFabOpen = false;
+  }
 </script>
 
 <main class="app">
-  <header class="toolbar">
-    <div>
-      <h1>Image Viewer</h1>
-      <p>Drag & drop images or use the picker.</p>
-    </div>
-    <div class="actions">
-      <label class="button primary">
-        <input
-          bind:this={fileInput}
-          type="file"
-          multiple
-          accept="image/*,.zip,application/zip"
-          onchange={handleFileChange}
-        />
-        Add Images
-      </label>
-      <button class="button" onclick={clearImages} disabled={!images.length}>Clear</button>
-    </div>
-  </header>
-
   <div
     class:dragging={isDragging}
     class="dropzone"
@@ -108,6 +96,14 @@
     ondragleave={handleDragLeave}
     ondrop={handleDrop}
   >
+    <input
+      class="file-input"
+      bind:this={fileInput}
+      type="file"
+      multiple
+      accept="image/*,.zip,application/zip"
+      onchange={handleFileChange}
+    />
     {#if isLoading}
       <div class="loading-overlay" role="status" aria-live="polite">
         <div class="spinner" aria-hidden="true"></div>
@@ -116,68 +112,29 @@
     {/if}
     {#if images.length}
       <div class="viewer">
-        <div class="viewer-toolbar">
+        <div class="canvas" bind:this={canvasEl}>
           <button
-            class="button"
+            class="nav-button left"
             onclick={(event) => {
               event.stopPropagation();
               prevImage();
             }}
             disabled={currentIndex === 0}
+            aria-label="Previous image"
           >
-            Prev
+            ‹
           </button>
-          <span class="counter">{currentIndex + 1} / {images.length}</span>
           <button
-            class="button"
+            class="nav-button right"
             onclick={(event) => {
               event.stopPropagation();
               nextImage();
             }}
             disabled={currentIndex === images.length - 1}
+            aria-label="Next image"
           >
-            Next
+            ›
           </button>
-          <div class="spacer"></div>
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              zoomOut();
-            }}
-          >
-            -
-          </button>
-          <span class="zoom">{Math.round(zoom * 100)}%</span>
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              zoomIn();
-            }}
-          >
-            +
-          </button>
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              resetZoom();
-            }}
-          >
-            Reset
-          </button>
-          <button
-            class="button"
-            onclick={(event) => {
-              event.stopPropagation();
-              toggleFit();
-            }}
-          >
-            {fitToWindow ? "Actual Size" : "Fit"}
-          </button>
-        </div>
-        <div class="canvas" bind:this={canvasEl}>
           {#if images[currentIndex]}
             {#key imageReloadKey}
               <img
@@ -189,10 +146,12 @@
               />
             {/key}
           {/if}
-        </div>
-        <div class="meta">
-          <span>{images[currentIndex].name}</span>
-          <span>{Math.round(images[currentIndex].size / 1024)} KB</span>
+          <div class="meta">
+            <span>{images[currentIndex].name}</span>
+            <span>{Math.round(images[currentIndex].size / 1024)} KB</span>
+            <span class="counter">{currentIndex + 1} / {images.length}</span>
+            <span class="zoom">{Math.round(zoom * 100)}%</span>
+          </div>
         </div>
       </div>
     {:else}
@@ -204,5 +163,67 @@
         {/if}
       </div>
     {/if}
+
+    <div class="fab">
+      {#if isFabOpen}
+        <div class="fab-menu" role="menu">
+          <button
+            class="fab-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleFit();
+              closeFab();
+            }}
+            role="menuitem"
+          >
+            {fitToWindow ? "Actual Size" : "Fit"}
+          </button>
+          <button
+            class="fab-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              resetZoom();
+              closeFab();
+            }}
+            role="menuitem"
+          >
+            Reset
+          </button>
+          <button
+            class="fab-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              zoomIn();
+              closeFab();
+            }}
+            role="menuitem"
+          >
+            Zoom In
+          </button>
+          <button
+            class="fab-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              zoomOut();
+              closeFab();
+            }}
+            role="menuitem"
+          >
+            Zoom Out
+          </button>
+        </div>
+      {/if}
+      <button
+        class="fab-main"
+        onclick={(event) => {
+          event.stopPropagation();
+          toggleFab();
+        }}
+        aria-label="Open controls"
+        aria-expanded={isFabOpen}
+      >
+        +
+      </button>
+    </div>
   </div>
 </main>

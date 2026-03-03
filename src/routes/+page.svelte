@@ -329,7 +329,6 @@
   {statusMessage}
   {errorMessage}
   {handleFileChange}
-  {clearImages}
   {openPicker}
   {handleDropzoneKey}
   {handleDragEnter}
