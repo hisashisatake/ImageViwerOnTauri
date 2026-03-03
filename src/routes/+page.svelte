@@ -30,6 +30,7 @@
   let statusMessage = $state("");
   let errorMessage = $state("");
   let dragCounter = 0;
+  let imageReloadKey = $state(false);
 
   function isArchiveFile(file: File) {
     const lowerName = file.name.toLowerCase();
@@ -214,6 +215,15 @@
     fitToWindow = !fitToWindow;
   }
 
+  function reloadCurrentImage() {
+    if (!images.length) return;
+    imageReloadKey = !imageReloadKey;
+  }
+
+  function handleResize() {
+    reloadCurrentImage();
+  }
+
   function openPicker() {
     fileInput?.click();
   }
@@ -305,9 +315,12 @@
   });
 </script>
 
+<svelte:window on:resize={handleResize} />
+
 <PageView
   bind:fileInput
   bind:zoom
+  {imageReloadKey}
   {images}
   {currentIndex}
   {fitToWindow}

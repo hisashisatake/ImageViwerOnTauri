@@ -19,6 +19,7 @@
   export let statusMessage: string;
   export let errorMessage: string;
   export let fileInput: HTMLInputElement | null;
+  export let imageReloadKey: boolean;
 
   export let handleFileChange: (event: Event) => void | Promise<void>;
   export let clearImages: () => void;
@@ -178,13 +179,15 @@
         </div>
         <div class="canvas" bind:this={canvasEl}>
           {#if images[currentIndex]}
-            <img
-              bind:this={imgEl}
-              src={images[currentIndex].url}
-              alt={images[currentIndex].name}
-              onload={updateFitZoom}
-              style={`transform: translate(-50%, -50%) scale(${zoom});`}
-            />
+            {#key imageReloadKey}
+              <img
+                bind:this={imgEl}
+                src={images[currentIndex].url}
+                alt={images[currentIndex].name}
+                onload={updateFitZoom}
+                style={`transform: translate(-50%, -50%) scale(${zoom});`}
+              />
+            {/key}
           {/if}
         </div>
         <div class="meta">
