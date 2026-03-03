@@ -146,6 +146,7 @@ body {
 .empty {
   text-align: center;
   color: #a6b0bf;
+  margin: auto;
 }
 
 .empty p {
