@@ -534,7 +534,6 @@
   {spreadMode}
   {readingDirection}
   {handleFileChange}
-  {openPicker}
   {handleDropzoneKey}
   {handleDragEnter}
   {handleDragOver}

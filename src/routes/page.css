@@ -40,6 +40,49 @@
   flex: 1;
 }
 
+.canvas-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.canvas-scroll.draggable {
+  cursor: grab;
+}
+
+.canvas-scroll.dragging {
+  cursor: grabbing;
+}
+
+.canvas-scroll.draggable * {
+  cursor: inherit;
+}
+
+.canvas-scroll.draggable img,
+.canvas-scroll.draggable .pdf-canvas {
+  pointer-events: none;
+  -webkit-user-drag: none;
+}
+
+.pan-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.nav-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.nav-layer .nav-button {
+  pointer-events: auto;
+}
+
 .spread-view {
   position: absolute;
   inset: 0;

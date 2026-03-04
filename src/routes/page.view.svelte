@@ -27,7 +27,6 @@
   export let readingDirection: "ltr" | "rtl";
 
   export let handleFileChange: (event: Event) => void | Promise<void>;
-  export let openPicker: () => void;
   export let handleDropzoneKey: (event: KeyboardEvent) => void;
   export let handleDragEnter: (event: DragEvent) => void;
   export let handleDragOver: (event: DragEvent) => void;
@@ -57,6 +56,13 @@
   let leftItem: ImageItem | null = null;
   let rightItem: ImageItem | null = null;
   let isPdf = false;
+  let panX = 0;
+  let panY = 0;
+  let isPanning = false;
+  let panStartX = 0;
+  let panStartY = 0;
+  let panOriginX = 0;
+  let panOriginY = 0;
 
   function updateFitZoom() {
     if (!fitToWindow) return;
@@ -117,6 +123,37 @@
   function closeFab() {
     isFabOpen = false;
   }
+
+  function startPan(event: PointerEvent) {
+    if (fitToWindow) return;
+    if (event.button !== 0) return;
+    const target = event.currentTarget as HTMLElement | null;
+    target?.setPointerCapture?.(event.pointerId);
+    isPanning = true;
+    panStartX = event.clientX;
+    panStartY = event.clientY;
+    panOriginX = panX;
+    panOriginY = panY;
+  }
+
+  function movePan(event: PointerEvent) {
+    if (!isPanning) return;
+    if (event.buttons === 0) {
+      endPan(event);
+      return;
+    }
+    const deltaX = event.clientX - panStartX;
+    const deltaY = event.clientY - panStartY;
+    panX = panOriginX + deltaX;
+    panY = panOriginY + deltaY;
+  }
+
+  function endPan(event: PointerEvent) {
+    if (!isPanning) return;
+    const target = event.currentTarget as HTMLElement | null;
+    target?.releasePointerCapture?.(event.pointerId);
+    isPanning = false;
+  }
 </script>
 
 <main class="app">
@@ -126,7 +163,6 @@
     role="button"
     tabindex="0"
     aria-label="Image dropzone. Click to open file picker."
-    onclick={openPicker}
     onkeydown={handleDropzoneKey}
     ondragenter={handleDragEnter}
     ondragover={handleDragOver}
@@ -150,136 +186,153 @@
     {#if images.length}
       <div class="viewer">
         <div class="canvas" bind:this={canvasEl}>
-          <button
-            class="nav-button left"
-            onclick={(event) => {
-              event.stopPropagation();
-              if (readingDirection === "rtl") {
-                if (isPdf) {
-                  nextPdfPage();
-                } else {
-                  nextImage();
-                }
-              } else if (isPdf) {
-                prevPdfPage();
-              } else {
-                prevImage();
-              }
-            }}
-            disabled={readingDirection === "rtl"
-              ? (isPdf ? pdfPage >= pdfPageCount : currentIndex >= images.length - 1)
-              : (isPdf ? pdfPage <= 1 : currentIndex === 0)}
-            aria-label={readingDirection === "rtl"
-              ? (isPdf ? "Next page" : "Next image")
-              : (isPdf ? "Previous page" : "Previous image")}
+          <div
+            class:draggable={!fitToWindow}
+            class:dragging={isPanning}
+            class="canvas-scroll"
+            role="application"
+            onpointerdown={startPan}
+            onpointermove={movePan}
+            onpointerup={endPan}
+            onpointercancel={endPan}
           >
-            ‹
-          </button>
-          <button
-            class="nav-button right"
-            onclick={(event) => {
-              event.stopPropagation();
-              if (readingDirection === "rtl") {
-                if (isPdf) {
+            <div class="pan-layer" style={`transform: translate(${panX}px, ${panY}px);`}>
+              {#if currentItem}
+                {#key imageReloadKey}
+                  {#if isPdf}
+                    <div class:spread={spreadMode} class="spread-view">
+                      <div class="spread-panel left" bind:this={leftPanelEl}>
+                        <PdfViewer
+                          src={currentItem.url}
+                          page={readingDirection === "rtl" ? pdfPage + 1 : pdfPage}
+                          zoom={zoom}
+                          fitToWindow={fitToWindow}
+                          onPageCount={setPdfPageCount}
+                          onFitZoom={updatePdfFitZoom}
+                          onError={handlePdfError}
+                        />
+                      </div>
+                      {#if spreadMode && pdfPage + 1 <= pdfPageCount}
+                        <div class="spread-panel right">
+                          <PdfViewer
+                            src={currentItem.url}
+                            page={readingDirection === "rtl" ? pdfPage : pdfPage + 1}
+                            zoom={zoom}
+                            fitToWindow={fitToWindow}
+                            onPageCount={() => {}}
+                            onFitZoom={() => {}}
+                            onError={handlePdfError}
+                          />
+                        </div>
+                      {/if}
+                    </div>
+                  {:else if spreadMode}
+                    <div class="spread-view">
+                      <div class="spread-panel left" bind:this={leftPanelEl}>
+                        {#if leftItem}
+                          <img
+                            class="spread-image left"
+                            bind:this={imgElPrimary}
+                            src={leftItem.url}
+                            alt={leftItem.name}
+                            onload={updateFitZoom}
+                            style={`transform: translate(0, -50%) scale(${zoom});`}
+                          />
+                        {/if}
+                      </div>
+                      <div class="spread-panel right">
+                        {#if rightItem}
+                          <img
+                            class="spread-image right"
+                            src={rightItem.url}
+                            alt={rightItem.name}
+                            onload={updateFitZoom}
+                            style={`transform: translate(0, -50%) scale(${zoom});`}
+                          />
+                        {/if}
+                      </div>
+                    </div>
+                  {:else}
+                    <img
+                      bind:this={imgElPrimary}
+                      src={currentItem.url}
+                      alt={currentItem.name}
+                      onload={updateFitZoom}
+                      style={`transform: translate(-50%, -50%) scale(${zoom});`}
+                    />
+                  {/if}
+                {/key}
+              {/if}
+            </div>
+          </div>
+          <div class="nav-layer">
+            <button
+              class="nav-button left"
+              onclick={(event) => {
+                event.stopPropagation();
+                if (readingDirection === "rtl") {
+                  if (isPdf) {
+                    nextPdfPage();
+                  } else {
+                    nextImage();
+                  }
+                } else if (isPdf) {
                   prevPdfPage();
                 } else {
                   prevImage();
                 }
-              } else if (isPdf) {
-                nextPdfPage();
-              } else {
-                nextImage();
-              }
-            }}
-            disabled={readingDirection === "rtl"
-              ? (isPdf ? pdfPage <= 1 : currentIndex === 0)
-              : (isPdf ? pdfPage >= pdfPageCount : currentIndex >= images.length - 1)}
-            aria-label={readingDirection === "rtl"
-              ? (isPdf ? "Previous page" : "Previous image")
-              : (isPdf ? "Next page" : "Next image")}
-          >
-            ›
-          </button>
-          {#if currentItem}
-            {#key imageReloadKey}
-              {#if isPdf}
-                <div class:spread={spreadMode} class="spread-view">
-                  <div class="spread-panel left" bind:this={leftPanelEl}>
-                    <PdfViewer
-                      src={currentItem.url}
-                      page={readingDirection === "rtl" ? pdfPage + 1 : pdfPage}
-                      zoom={zoom}
-                      fitToWindow={fitToWindow}
-                      onPageCount={setPdfPageCount}
-                      onFitZoom={updatePdfFitZoom}
-                      onError={handlePdfError}
-                    />
-                  </div>
-                  {#if spreadMode && pdfPage + 1 <= pdfPageCount}
-                    <div class="spread-panel right">
-                      <PdfViewer
-                        src={currentItem.url}
-                        page={readingDirection === "rtl" ? pdfPage : pdfPage + 1}
-                        zoom={zoom}
-                        fitToWindow={fitToWindow}
-                        onPageCount={() => {}}
-                        onFitZoom={() => {}}
-                        onError={handlePdfError}
-                      />
-                    </div>
-                  {/if}
-                </div>
-              {:else if spreadMode}
-                <div class="spread-view">
-                  <div class="spread-panel left" bind:this={leftPanelEl}>
-                    {#if leftItem}
-                      <img
-                        class="spread-image left"
-                        bind:this={imgElPrimary}
-                        src={leftItem.url}
-                        alt={leftItem.name}
-                        onload={updateFitZoom}
-                        style={`transform: translate(0, -50%) scale(${zoom});`}
-                      />
-                    {/if}
-                  </div>
-                  <div class="spread-panel right">
-                    {#if rightItem}
-                      <img
-                        class="spread-image right"
-                        src={rightItem.url}
-                        alt={rightItem.name}
-                        onload={updateFitZoom}
-                        style={`transform: translate(0, -50%) scale(${zoom});`}
-                      />
-                    {/if}
-                  </div>
-                </div>
-              {:else}
-                <img
-                  bind:this={imgElPrimary}
-                  src={currentItem.url}
-                  alt={currentItem.name}
-                  onload={updateFitZoom}
-                  style={`transform: translate(-50%, -50%) scale(${zoom});`}
-                />
-              {/if}
-            {/key}
-          {/if}
-          <div class="meta">
-            <span>{currentItem?.name ?? ""}</span>
-            <span>{currentItem ? Math.round(currentItem.size / 1024) : 0} KB</span>
-            {#if isPdf}
-              <span class="counter">
-                {pdfPage}{spreadMode && pdfPage + 1 <= pdfPageCount ? `-${pdfPage + 1}` : ""} / {pdfPageCount}
-              </span>
-            {:else}
-              <span class="counter">
-                {currentIndex + 1}{spreadMode && currentIndex + 1 < images.length ? `-${Math.min(images.length, currentIndex + 2)}` : ""} / {images.length}
-              </span>
-            {/if}
-            <span class="zoom">{Math.round(zoom * 100)}%</span>
+              }}
+              disabled={readingDirection === "rtl"
+                ? (isPdf ? pdfPage >= pdfPageCount : currentIndex >= images.length - 1)
+                : (isPdf ? pdfPage <= 1 : currentIndex === 0)}
+              aria-label={readingDirection === "rtl"
+                ? (isPdf ? "Next page" : "Next image")
+                : (isPdf ? "Previous page" : "Previous image")}
+            >
+              ‹
+            </button>
+            <button
+              class="nav-button right"
+              onclick={(event) => {
+                event.stopPropagation();
+                if (readingDirection === "rtl") {
+                  if (isPdf) {
+                    prevPdfPage();
+                  } else {
+                    prevImage();
+                  }
+                } else if (isPdf) {
+                  nextPdfPage();
+                } else {
+                  nextImage();
+                }
+              }}
+              disabled={readingDirection === "rtl"
+                ? (isPdf ? pdfPage <= 1 : currentIndex === 0)
+                : (isPdf ? pdfPage >= pdfPageCount : currentIndex >= images.length - 1)}
+              aria-label={readingDirection === "rtl"
+                ? (isPdf ? "Previous page" : "Previous image")
+                : (isPdf ? "Next page" : "Next image")}
+            >
+              ›
+            </button>
           </div>
+          {#if currentItem}
+            <div class="meta">
+              <span>{currentItem?.name ?? ""}</span>
+              <span>{currentItem ? Math.round(currentItem.size / 1024) : 0} KB</span>
+              {#if isPdf}
+                <span class="counter">
+                  {pdfPage}{spreadMode && pdfPage + 1 <= pdfPageCount ? `-${pdfPage + 1}` : ""} / {pdfPageCount}
+                </span>
+              {:else}
+                <span class="counter">
+                  {currentIndex + 1}{spreadMode && currentIndex + 1 < images.length ? `-${Math.min(images.length, currentIndex + 2)}` : ""} / {images.length}
+                </span>
+              {/if}
+              <span class="zoom">{Math.round(zoom * 100)}%</span>
+            </div>
+          {/if}
         </div>
       </div>
     {:else}
