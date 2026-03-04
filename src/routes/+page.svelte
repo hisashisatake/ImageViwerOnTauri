@@ -36,6 +36,12 @@
   let lastIndex = -1;
   let spreadMode = $state(false);
   let readingDirection = $state<"ltr" | "rtl">("ltr");
+  let currentItem = $derived(images[currentIndex] ?? null);
+  let isPdf = $derived(
+    currentItem
+      ? currentItem.type === "application/pdf" || currentItem.name.toLowerCase().endsWith(".pdf")
+      : false,
+  );
 
   function isArchiveFile(file: File) {
     const lowerName = file.name.toLowerCase();
@@ -359,11 +365,31 @@
     switch (event.key) {
       case "ArrowLeft":
         event.preventDefault();
-        prevImage();
+        if (readingDirection === "ltr") {
+          if (isPdf) {
+            prevPdfPage();
+          } else {
+            prevImage();
+          }
+        } else if (isPdf) {
+          nextPdfPage();
+        } else {
+          nextImage();
+        }
         break;
       case "ArrowRight":
         event.preventDefault();
-        nextImage();
+        if (readingDirection === "ltr") {
+          if (isPdf) {
+            nextPdfPage();
+          } else {
+            nextImage();
+          }
+        } else if (isPdf) {
+          prevPdfPage();
+        } else {
+          prevImage();
+        }
         break;
       case "Home":
         event.preventDefault();
@@ -395,6 +421,7 @@
       pdfPageCount = 1;
     }
   });
+
 
   onMount(() => {
     const preventDefaults = (event: DragEvent) => {

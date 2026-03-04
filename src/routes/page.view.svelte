@@ -149,14 +149,24 @@
             class="nav-button left"
             onclick={(event) => {
               event.stopPropagation();
-              if (isPdf) {
+              if (readingDirection === "rtl") {
+                if (isPdf) {
+                  nextPdfPage();
+                } else {
+                  nextImage();
+                }
+              } else if (isPdf) {
                 prevPdfPage();
               } else {
                 prevImage();
               }
             }}
-            disabled={isPdf ? pdfPage <= 1 : currentIndex === 0}
-            aria-label={isPdf ? "Previous page" : "Previous image"}
+            disabled={readingDirection === "rtl"
+              ? (isPdf ? pdfPage >= pdfPageCount : currentIndex >= images.length - 1)
+              : (isPdf ? pdfPage <= 1 : currentIndex === 0)}
+            aria-label={readingDirection === "rtl"
+              ? (isPdf ? "Next page" : "Next image")
+              : (isPdf ? "Previous page" : "Previous image")}
           >
             ‹
           </button>
@@ -164,14 +174,24 @@
             class="nav-button right"
             onclick={(event) => {
               event.stopPropagation();
-              if (isPdf) {
+              if (readingDirection === "rtl") {
+                if (isPdf) {
+                  prevPdfPage();
+                } else {
+                  prevImage();
+                }
+              } else if (isPdf) {
                 nextPdfPage();
               } else {
                 nextImage();
               }
             }}
-            disabled={isPdf ? pdfPage >= pdfPageCount : currentIndex >= images.length - 1}
-            aria-label={isPdf ? "Next page" : "Next image"}
+            disabled={readingDirection === "rtl"
+              ? (isPdf ? pdfPage <= 1 : currentIndex === 0)
+              : (isPdf ? pdfPage >= pdfPageCount : currentIndex >= images.length - 1)}
+            aria-label={readingDirection === "rtl"
+              ? (isPdf ? "Previous page" : "Previous image")
+              : (isPdf ? "Next page" : "Next image")}
           >
             ›
           </button>
