@@ -23,6 +23,8 @@
   export let imageReloadKey: boolean;
   export let pdfPage: number;
   export let pdfPageCount: number;
+  export let spreadMode: boolean;
+  export let readingDirection: "ltr" | "rtl";
 
   export let handleFileChange: (event: Event) => void | Promise<void>;
   export let openPicker: () => void;
@@ -42,24 +44,32 @@
   export let nextPdfPage: () => void;
   export let handlePdfError: (message: string) => void;
   export let updatePdfFitZoom: (zoom: number) => void;
+  export let toggleSpreadMode: () => void;
+  export let toggleReadingDirection: () => void;
 
   let canvasEl: HTMLDivElement | null = null;
-  let imgEl: HTMLImageElement | null = null;
+  let imgElPrimary: HTMLImageElement | null = null;
+  let leftPanelEl: HTMLDivElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let isFabOpen = false;
   let currentItem: ImageItem | null = null;
+  let secondaryItem: ImageItem | null = null;
+  let leftItem: ImageItem | null = null;
+  let rightItem: ImageItem | null = null;
   let isPdf = false;
 
   function updateFitZoom() {
     if (!fitToWindow) return;
-    if (!canvasEl || !imgEl) return;
-    if (!imgEl.naturalHeight) return;
-    const canvasRect = canvasEl.getBoundingClientRect();
+    if (!canvasEl || !imgElPrimary) return;
+    if (!imgElPrimary.naturalHeight) return;
+    const canvasRect = spreadMode && leftPanelEl
+      ? leftPanelEl.getBoundingClientRect()
+      : canvasEl.getBoundingClientRect();
     const canvasHeight = canvasRect.height;
     const canvasWidth = canvasRect.width;
     if (!canvasHeight || !canvasWidth) return;
-    const heightZoom = canvasHeight / imgEl.naturalHeight;
-    const widthZoom = canvasWidth / imgEl.naturalWidth;
+    const heightZoom = canvasHeight / imgElPrimary.naturalHeight;
+    const widthZoom = canvasWidth / imgElPrimary.naturalWidth;
     const nextZoom = Math.min(heightZoom, widthZoom);
     zoom = Number(nextZoom.toFixed(4));
   }
@@ -88,9 +98,12 @@
   }
 
   $: currentItem = images[currentIndex] ?? null;
+  $: secondaryItem = spreadMode ? images[currentIndex + 1] ?? null : null;
   $: isPdf = currentItem
     ? currentItem.type === "application/pdf" || currentItem.name.toLowerCase().endsWith(".pdf")
     : false;
+  $: leftItem = spreadMode && readingDirection === "rtl" ? secondaryItem : currentItem;
+  $: rightItem = spreadMode && readingDirection === "rtl" ? currentItem : secondaryItem;
 
   function toggleFab() {
     isFabOpen = !isFabOpen;
@@ -157,7 +170,7 @@
                 nextImage();
               }
             }}
-            disabled={isPdf ? pdfPage >= pdfPageCount : currentIndex === images.length - 1}
+            disabled={isPdf ? pdfPage >= (spreadMode ? Math.max(1, pdfPageCount - 1) : pdfPageCount) : (spreadMode ? currentIndex >= Math.max(0, images.length - 2) : currentIndex === images.length - 1)}
             aria-label={isPdf ? "Next page" : "Next image"}
           >
             ›
@@ -165,18 +178,59 @@
           {#if currentItem}
             {#key imageReloadKey}
               {#if isPdf}
-                <PdfViewer
-                  src={currentItem.url}
-                  page={pdfPage}
-                  zoom={zoom}
-                  fitToWindow={fitToWindow}
-                  onPageCount={setPdfPageCount}
-                  onFitZoom={updatePdfFitZoom}
-                  onError={handlePdfError}
-                />
+                <div class:spread={spreadMode} class="spread-view">
+                  <div class="spread-panel" bind:this={leftPanelEl}>
+                    <PdfViewer
+                      src={currentItem.url}
+                      page={readingDirection === "rtl" ? pdfPage + 1 : pdfPage}
+                      zoom={zoom}
+                      fitToWindow={fitToWindow}
+                      onPageCount={setPdfPageCount}
+                      onFitZoom={updatePdfFitZoom}
+                      onError={handlePdfError}
+                    />
+                  </div>
+                  {#if spreadMode && pdfPage + 1 <= pdfPageCount}
+                    <div class="spread-panel">
+                      <PdfViewer
+                        src={currentItem.url}
+                        page={readingDirection === "rtl" ? pdfPage : pdfPage + 1}
+                        zoom={zoom}
+                        fitToWindow={fitToWindow}
+                        onPageCount={() => {}}
+                        onFitZoom={() => {}}
+                        onError={handlePdfError}
+                      />
+                    </div>
+                  {/if}
+                </div>
+              {:else if spreadMode}
+                <div class="spread-view">
+                  <div class="spread-panel" bind:this={leftPanelEl}>
+                    {#if leftItem}
+                      <img
+                        bind:this={imgElPrimary}
+                        src={leftItem.url}
+                        alt={leftItem.name}
+                        onload={updateFitZoom}
+                        style={`transform: translate(-50%, -50%) scale(${zoom});`}
+                      />
+                    {/if}
+                  </div>
+                  <div class="spread-panel">
+                    {#if rightItem}
+                      <img
+                        src={rightItem.url}
+                        alt={rightItem.name}
+                        onload={updateFitZoom}
+                        style={`transform: translate(-50%, -50%) scale(${zoom});`}
+                      />
+                    {/if}
+                  </div>
+                </div>
               {:else}
                 <img
-                  bind:this={imgEl}
+                  bind:this={imgElPrimary}
                   src={currentItem.url}
                   alt={currentItem.name}
                   onload={updateFitZoom}
@@ -188,7 +242,15 @@
           <div class="meta">
             <span>{currentItem?.name ?? ""}</span>
             <span>{currentItem ? Math.round(currentItem.size / 1024) : 0} KB</span>
-            <span class="counter">{currentIndex + 1} / {images.length}</span>
+            {#if isPdf}
+              <span class="counter">
+                {pdfPage}{spreadMode && pdfPage + 1 <= pdfPageCount ? `-${pdfPage + 1}` : ""} / {pdfPageCount}
+              </span>
+            {:else}
+              <span class="counter">
+                {currentIndex + 1}{spreadMode && currentIndex + 1 < images.length ? `-${Math.min(images.length, currentIndex + 2)}` : ""} / {images.length}
+              </span>
+            {/if}
             <span class="zoom">{Math.round(zoom * 100)}%</span>
           </div>
         </div>
@@ -206,6 +268,28 @@
     <div class="fab">
       {#if isFabOpen}
         <div class="fab-menu" role="menu">
+          <button
+            class="fab-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleSpreadMode();
+              closeFab();
+            }}
+            role="menuitem"
+          >
+            {spreadMode ? "Single Page" : "Spread"}
+          </button>
+          <button
+            class="fab-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleReadingDirection();
+              closeFab();
+            }}
+            role="menuitem"
+          >
+            {readingDirection === "rtl" ? "Right Opening" : "Left Opening"}
+          </button>
           <button
             class="fab-item"
             onclick={(event) => {

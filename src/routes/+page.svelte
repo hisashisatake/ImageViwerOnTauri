@@ -34,6 +34,8 @@
   let pdfPage = $state(1);
   let pdfPageCount = $state(1);
   let lastIndex = -1;
+  let spreadMode = $state(false);
+  let readingDirection = $state<"ltr" | "rtl">("ltr");
 
   function isArchiveFile(file: File) {
     const lowerName = file.name.toLowerCase();
@@ -250,14 +252,29 @@
     pdfPageCount = 1;
   }
 
+  function getLastImageStartIndex() {
+    if (!images.length) return 0;
+    if (!spreadMode) return images.length - 1;
+    const last = images.length - 1;
+    return last - (last % 2);
+  }
+
+  function getLastPdfStartPage() {
+    if (!spreadMode) return pdfPageCount;
+    return pdfPageCount % 2 === 0 ? Math.max(1, pdfPageCount - 1) : pdfPageCount;
+  }
+
   function prevImage() {
     if (!images.length) return;
-    currentIndex = Math.max(0, currentIndex - 1);
+    const step = spreadMode ? 2 : 1;
+    currentIndex = Math.max(0, currentIndex - step);
   }
 
   function nextImage() {
     if (!images.length) return;
-    currentIndex = Math.min(images.length - 1, currentIndex + 1);
+    const step = spreadMode ? 2 : 1;
+    const lastStart = getLastImageStartIndex();
+    currentIndex = Math.min(lastStart, currentIndex + step);
   }
 
   function zoomIn() {
@@ -285,15 +302,36 @@
 
   function setPdfPageCount(count: number) {
     pdfPageCount = Math.max(1, count);
-    pdfPage = Math.min(pdfPage, pdfPageCount);
+    const lastStart = getLastPdfStartPage();
+    pdfPage = Math.min(pdfPage, lastStart);
+    if (spreadMode && pdfPage % 2 === 0) {
+      pdfPage = Math.max(1, pdfPage - 1);
+    }
   }
 
   function prevPdfPage() {
-    pdfPage = Math.max(1, pdfPage - 1);
+    const step = spreadMode ? 2 : 1;
+    pdfPage = Math.max(1, pdfPage - step);
   }
 
   function nextPdfPage() {
-    pdfPage = Math.min(pdfPageCount, pdfPage + 1);
+    const step = spreadMode ? 2 : 1;
+    const lastStart = getLastPdfStartPage();
+    pdfPage = Math.min(lastStart, pdfPage + step);
+  }
+
+  function toggleSpreadMode() {
+    spreadMode = !spreadMode;
+    if (spreadMode) {
+      currentIndex = Math.max(0, currentIndex - (currentIndex % 2));
+      if (pdfPage % 2 === 0) {
+        pdfPage = Math.max(1, pdfPage - 1);
+      }
+    }
+  }
+
+  function toggleReadingDirection() {
+    readingDirection = readingDirection === "ltr" ? "rtl" : "ltr";
   }
 
   function handlePdfError(message: string) {
@@ -426,6 +464,8 @@
   {errorMessage}
   {pdfPage}
   {pdfPageCount}
+  {spreadMode}
+  {readingDirection}
   {handleFileChange}
   {openPicker}
   {handleDropzoneKey}
@@ -444,4 +484,6 @@
   {nextPdfPage}
   {handlePdfError}
   {updatePdfFitZoom}
+  {toggleSpreadMode}
+  {toggleReadingDirection}
 />
