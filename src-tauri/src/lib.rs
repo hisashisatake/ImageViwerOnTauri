@@ -6,7 +6,7 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{command, State};
+use tauri::{command, State, Window};
 use unrar::Archive;
 use zip::ZipArchive;
 
@@ -351,12 +351,29 @@ fn handle_file_drop(
     Ok(extracted)
 }
 
+#[command]
+fn toggle_fullscreen(window: Window) -> Result<bool, String> {
+    let is_fullscreen = window
+        .is_fullscreen()
+        .map_err(|err| format!("Failed to read fullscreen state: {err}"))?;
+    let next = !is_fullscreen;
+    window
+        .set_fullscreen(next)
+        .map_err(|err| format!("Failed to set fullscreen: {err}"))?;
+    Ok(next)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(context: tauri::Context<tauri::Wry>) {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ExtractState::default())
-    .invoke_handler(tauri::generate_handler![extract_archive, extract_rar, handle_file_drop])
+        .invoke_handler(tauri::generate_handler![
+            extract_archive,
+            extract_rar,
+            handle_file_drop,
+            toggle_fullscreen
+        ])
         .run(context)
         .expect("error while running tauri application");
 }
