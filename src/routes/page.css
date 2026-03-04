@@ -45,8 +45,8 @@
   inset: 0;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  padding: 16px;
+  gap: 0;
+  padding: 0;
   align-items: center;
   justify-items: center;
 }
@@ -63,6 +63,41 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
+}
+
+.spread-panel.left .spread-image,
+.spread-panel.right .spread-image {
+  position: absolute;
+  top: 50%;
+  max-width: none;
+  max-height: none;
+  transition: transform 0.15s ease;
+}
+
+.spread-panel.left .spread-image {
+  right: 0;
+  left: auto;
+  transform-origin: right center;
+}
+
+.spread-panel.right .spread-image {
+  left: 0;
+  right: auto;
+  transform-origin: left center;
+}
+
+.spread-panel.left .pdf-canvas {
+  left: 100%;
+  right: auto;
+  transform: translate(-100%, -50%);
+  transform-origin: right center;
+}
+
+.spread-panel.right .pdf-canvas {
+  left: 0;
+  right: auto;
+  transform: translate(0, -50%);
+  transform-origin: left center;
 }
 
 .canvas img {

@@ -179,7 +179,7 @@
             {#key imageReloadKey}
               {#if isPdf}
                 <div class:spread={spreadMode} class="spread-view">
-                  <div class="spread-panel" bind:this={leftPanelEl}>
+                  <div class="spread-panel left" bind:this={leftPanelEl}>
                     <PdfViewer
                       src={currentItem.url}
                       page={readingDirection === "rtl" ? pdfPage + 1 : pdfPage}
@@ -191,7 +191,7 @@
                     />
                   </div>
                   {#if spreadMode && pdfPage + 1 <= pdfPageCount}
-                    <div class="spread-panel">
+                    <div class="spread-panel right">
                       <PdfViewer
                         src={currentItem.url}
                         page={readingDirection === "rtl" ? pdfPage : pdfPage + 1}
@@ -206,24 +206,26 @@
                 </div>
               {:else if spreadMode}
                 <div class="spread-view">
-                  <div class="spread-panel" bind:this={leftPanelEl}>
+                  <div class="spread-panel left" bind:this={leftPanelEl}>
                     {#if leftItem}
                       <img
+                        class="spread-image left"
                         bind:this={imgElPrimary}
                         src={leftItem.url}
                         alt={leftItem.name}
                         onload={updateFitZoom}
-                        style={`transform: translate(-50%, -50%) scale(${zoom});`}
+                        style={`transform: translate(0, -50%) scale(${zoom});`}
                       />
                     {/if}
                   </div>
-                  <div class="spread-panel">
+                  <div class="spread-panel right">
                     {#if rightItem}
                       <img
+                        class="spread-image right"
                         src={rightItem.url}
                         alt={rightItem.name}
                         onload={updateFitZoom}
-                        style={`transform: translate(-50%, -50%) scale(${zoom});`}
+                        style={`transform: translate(0, -50%) scale(${zoom});`}
                       />
                     {/if}
                   </div>
