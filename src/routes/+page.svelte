@@ -363,6 +363,15 @@
     }
 
     switch (event.key) {
+      case "s":
+      case "S":
+        event.preventDefault();
+        toggleSpreadMode();
+        break;
+      case "2":
+        event.preventDefault();
+        toggleReadingDirection();
+        break;
       case "ArrowLeft":
         event.preventDefault();
         if (readingDirection === "ltr") {
