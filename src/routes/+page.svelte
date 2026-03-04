@@ -44,6 +44,14 @@
     );
   }
 
+  function isRarFile(file: File) {
+    const lowerName = file.name.toLowerCase();
+    return (
+      file.type === "application/x-rar-compressed" ||
+      lowerName.endsWith(".rar")
+    );
+  }
+
   function isPdfFile(file: File) {
     const lowerName = file.name.toLowerCase();
     return file.type === "application/pdf" || lowerName.endsWith(".pdf");
@@ -56,6 +64,22 @@
   async function extractArchive(file: File): Promise<ImageItem[]> {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const extracted = await invoke<ExtractedFile[]>("extract_archive", {
+      archiveName: file.name,
+      bytes,
+    });
+    return extracted.map((item) => ({
+      name: item.name,
+      url: convertFileSrc(item.path),
+      size: item.size,
+      type: "image/*",
+      lastModified: Date.now(),
+      source: "file",
+    }));
+  }
+
+  async function extractRar(file: File): Promise<ImageItem[]> {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const extracted = await invoke<ExtractedFile[]>("extract_rar", {
       archiveName: file.name,
       bytes,
     });
@@ -137,6 +161,13 @@
         if (isArchiveFile(file)) {
           statusMessage = `Extracting ${file.name}...`;
           const extracted = await extractArchive(file);
+          newItems.push(...extracted);
+          continue;
+        }
+
+        if (isRarFile(file)) {
+          statusMessage = `Extracting ${file.name}...`;
+          const extracted = await extractRar(file);
           newItems.push(...extracted);
         }
       }

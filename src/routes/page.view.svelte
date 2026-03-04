@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import PdfViewer from "$lib/ui/PdfViewer.svelte";
 
   type ImageItem = {
     name: string;
@@ -119,7 +120,6 @@
       bind:this={fileInput}
       type="file"
       multiple
-      accept="image/*,.zip,application/zip"
       accept="image/*,.zip,application/zip,.rar,application/x-rar-compressed,.pdf,application/pdf"
       onchange={handleFileChange}
     />
@@ -136,10 +136,14 @@
             class="nav-button left"
             onclick={(event) => {
               event.stopPropagation();
-              prevImage();
+              if (isPdf) {
+                prevPdfPage();
+              } else {
+                prevImage();
+              }
             }}
-            disabled={currentIndex === 0}
-            aria-label="Previous image"
+            disabled={isPdf ? pdfPage <= 1 : currentIndex === 0}
+            aria-label={isPdf ? "Previous page" : "Previous image"}
           >
             ‹
           </button>
@@ -147,27 +151,43 @@
             class="nav-button right"
             onclick={(event) => {
               event.stopPropagation();
-              nextImage();
+              if (isPdf) {
+                nextPdfPage();
+              } else {
+                nextImage();
+              }
             }}
-            disabled={currentIndex === images.length - 1}
-            aria-label="Next image"
+            disabled={isPdf ? pdfPage >= pdfPageCount : currentIndex === images.length - 1}
+            aria-label={isPdf ? "Next page" : "Next image"}
           >
             ›
           </button>
-          {#if images[currentIndex]}
+          {#if currentItem}
             {#key imageReloadKey}
-              <img
-                bind:this={imgEl}
-                src={images[currentIndex].url}
-                alt={images[currentIndex].name}
-                onload={updateFitZoom}
-                style={`transform: translate(-50%, -50%) scale(${zoom});`}
-              />
+              {#if isPdf}
+                <PdfViewer
+                  src={currentItem.url}
+                  page={pdfPage}
+                  zoom={zoom}
+                  fitToWindow={fitToWindow}
+                  onPageCount={setPdfPageCount}
+                  onFitZoom={updatePdfFitZoom}
+                  onError={handlePdfError}
+                />
+              {:else}
+                <img
+                  bind:this={imgEl}
+                  src={currentItem.url}
+                  alt={currentItem.name}
+                  onload={updateFitZoom}
+                  style={`transform: translate(-50%, -50%) scale(${zoom});`}
+                />
+              {/if}
             {/key}
           {/if}
           <div class="meta">
-            <span>{images[currentIndex].name}</span>
-            <span>{Math.round(images[currentIndex].size / 1024)} KB</span>
+            <span>{currentItem?.name ?? ""}</span>
+            <span>{currentItem ? Math.round(currentItem.size / 1024) : 0} KB</span>
             <span class="counter">{currentIndex + 1} / {images.length}</span>
             <span class="zoom">{Math.round(zoom * 100)}%</span>
           </div>
@@ -176,7 +196,7 @@
     {:else}
       <div class="empty">
         <p>Drop image files here.</p>
-        <p>Supported: png, jpg, webp, gif, svg, zip.</p>
+        <p>Supported: png, jpg, webp, gif, svg, zip, rar, pdf.</p>
         {#if errorMessage}
           <p>{errorMessage}</p>
         {/if}
