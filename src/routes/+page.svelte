@@ -42,6 +42,7 @@
       ? currentItem.type === "application/pdf" || currentItem.name.toLowerCase().endsWith(".pdf")
       : false,
   );
+  let isFullscreen = $state(false);
 
   function isArchiveFile(file: File) {
     const lowerName = file.name.toLowerCase();
@@ -355,6 +356,16 @@
     readingDirection = readingDirection === "ltr" ? "rtl" : "ltr";
   }
 
+  async function toggleFullscreen() {
+    try {
+      const next = await invoke<boolean>("toggle_fullscreen");
+      isFullscreen = next;
+    } catch (error) {
+      console.error(error);
+      errorMessage = "Failed to toggle fullscreen.";
+    }
+  }
+
   function handlePdfError(message: string) {
     errorMessage = message;
   }
@@ -394,6 +405,10 @@
       case "S":
         event.preventDefault();
         toggleSpreadMode();
+        break;
+      case "F11":
+        event.preventDefault();
+        void toggleFullscreen();
         break;
       case "2":
         event.preventDefault();
@@ -537,4 +552,5 @@
   {updatePdfFitZoom}
   {toggleSpreadMode}
   {toggleReadingDirection}
+  {toggleFullscreen}
 />

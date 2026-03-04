@@ -46,6 +46,7 @@
   export let updatePdfFitZoom: (zoom: number) => void;
   export let toggleSpreadMode: () => void;
   export let toggleReadingDirection: () => void;
+  export let toggleFullscreen: () => void;
 
   let canvasEl: HTMLDivElement | null = null;
   let imgElPrimary: HTMLImageElement | null = null;
@@ -290,6 +291,17 @@
     <div class="fab">
       {#if isFabOpen}
         <div class="fab-menu" role="menu">
+          <button
+            class="fab-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleFullscreen();
+              closeFab();
+            }}
+            role="menuitem"
+          >
+            Full Screen
+          </button>
           <button
             class="fab-item"
             onclick={(event) => {
