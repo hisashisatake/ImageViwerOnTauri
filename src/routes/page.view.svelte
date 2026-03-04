@@ -37,7 +37,6 @@
   export let nextImage: () => void;
   export let zoomIn: () => void;
   export let zoomOut: () => void;
-  export let resetZoom: () => void;
   export let toggleFit: () => void;
   export let setPdfPageCount: (count: number) => void;
   export let prevPdfPage: () => void;
@@ -105,6 +104,11 @@
     : false;
   $: leftItem = spreadMode && readingDirection === "rtl" ? secondaryItem : currentItem;
   $: rightItem = spreadMode && readingDirection === "rtl" ? currentItem : secondaryItem;
+
+  $: if (fitToWindow) {
+    panX = 0;
+    panY = 0;
+  }
 
   function toggleFab() {
     isFabOpen = !isFabOpen;
@@ -334,17 +338,6 @@
             role="menuitem"
           >
             {fitToWindow ? "Actual Size" : "Fit"}
-          </button>
-          <button
-            class="fab-item"
-            onclick={(event) => {
-              event.stopPropagation();
-              resetZoom();
-              closeFab();
-            }}
-            role="menuitem"
-          >
-            Reset
           </button>
           <button
             class="fab-item"

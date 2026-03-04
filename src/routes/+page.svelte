@@ -318,12 +318,13 @@
     zoom = Math.max(0.2, Number((zoom - 0.1).toFixed(2)));
   }
 
-  function resetZoom() {
-    zoom = 1;
-  }
-
   function toggleFit() {
-    fitToWindow = !fitToWindow;
+    if (fitToWindow) {
+      fitToWindow = false;
+      zoom = 1;
+    } else {
+      fitToWindow = true;
+    }
   }
 
   function reloadCurrentImage() {
@@ -543,7 +544,6 @@
   {nextImage}
   {zoomIn}
   {zoomOut}
-  {resetZoom}
   {toggleFit}
   {setPdfPageCount}
   {prevPdfPage}
