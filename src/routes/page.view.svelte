@@ -20,6 +20,8 @@
   export let errorMessage: string;
   export let fileInput: HTMLInputElement | null;
   export let imageReloadKey: boolean;
+  export let pdfPage: number;
+  export let pdfPageCount: number;
 
   export let handleFileChange: (event: Event) => void | Promise<void>;
   export let openPicker: () => void;
@@ -34,11 +36,18 @@
   export let zoomOut: () => void;
   export let resetZoom: () => void;
   export let toggleFit: () => void;
+  export let setPdfPageCount: (count: number) => void;
+  export let prevPdfPage: () => void;
+  export let nextPdfPage: () => void;
+  export let handlePdfError: (message: string) => void;
+  export let updatePdfFitZoom: (zoom: number) => void;
 
   let canvasEl: HTMLDivElement | null = null;
   let imgEl: HTMLImageElement | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let isFabOpen = false;
+  let currentItem: ImageItem | null = null;
+  let isPdf = false;
 
   function updateFitZoom() {
     if (!fitToWindow) return;
@@ -77,6 +86,11 @@
     updateFitZoom();
   }
 
+  $: currentItem = images[currentIndex] ?? null;
+  $: isPdf = currentItem
+    ? currentItem.type === "application/pdf" || currentItem.name.toLowerCase().endsWith(".pdf")
+    : false;
+
   function toggleFab() {
     isFabOpen = !isFabOpen;
   }
@@ -106,6 +120,7 @@
       type="file"
       multiple
       accept="image/*,.zip,application/zip"
+      accept="image/*,.zip,application/zip,.rar,application/x-rar-compressed,.pdf,application/pdf"
       onchange={handleFileChange}
     />
     {#if isLoading}

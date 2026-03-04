@@ -50,6 +50,23 @@
   left: 50%;
 }
 
+.pdf-container {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pdf-canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.35);
+  border-radius: 6px;
+}
+
 .meta {
   position: absolute;
   left: 16px;

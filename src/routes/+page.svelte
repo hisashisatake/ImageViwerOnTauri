@@ -31,6 +31,9 @@
   let errorMessage = $state("");
   let dragCounter = 0;
   let imageReloadKey = $state(false);
+  let pdfPage = $state(1);
+  let pdfPageCount = $state(1);
+  let lastIndex = -1;
 
   function isArchiveFile(file: File) {
     const lowerName = file.name.toLowerCase();
@@ -39,6 +42,15 @@
       lowerName.endsWith(".zip") ||
       lowerName.endsWith(".cbz")
     );
+  }
+
+  function isPdfFile(file: File) {
+    const lowerName = file.name.toLowerCase();
+    return file.type === "application/pdf" || lowerName.endsWith(".pdf");
+  }
+
+  function isPdfName(name: string) {
+    return name.toLowerCase().endsWith(".pdf");
   }
 
   async function extractArchive(file: File): Promise<ImageItem[]> {
@@ -69,7 +81,7 @@
         name: item.name,
         url: convertFileSrc(item.path),
         size: item.size,
-        type: "image/*",
+        type: isPdfName(item.name) ? "application/pdf" : "image/*",
         lastModified: Date.now(),
         source: "file" as const,
       }));
@@ -104,6 +116,18 @@
             url: URL.createObjectURL(file),
             size: file.size,
             type: file.type,
+            lastModified: file.lastModified,
+            source: "blob",
+          });
+          continue;
+        }
+
+        if (isPdfFile(file)) {
+          newItems.push({
+            name: file.name,
+            url: URL.createObjectURL(file),
+            size: file.size,
+            type: "application/pdf",
             lastModified: file.lastModified,
             source: "blob",
           });
@@ -185,6 +209,8 @@
     currentIndex = 0;
     zoom = 1;
     fitToWindow = true;
+    pdfPage = 1;
+    pdfPageCount = 1;
   }
 
   function prevImage() {
@@ -218,6 +244,31 @@
   function reloadCurrentImage() {
     if (!images.length) return;
     imageReloadKey = !imageReloadKey;
+  }
+
+  function setPdfPageCount(count: number) {
+    pdfPageCount = Math.max(1, count);
+    pdfPage = Math.min(pdfPage, pdfPageCount);
+  }
+
+  function prevPdfPage() {
+    pdfPage = Math.max(1, pdfPage - 1);
+  }
+
+  function nextPdfPage() {
+    pdfPage = Math.min(pdfPageCount, pdfPage + 1);
+  }
+
+  function handlePdfError(message: string) {
+    errorMessage = message;
+  }
+
+  function updatePdfFitZoom(nextZoom: number) {
+    if (!fitToWindow) return;
+    if (!Number.isFinite(nextZoom)) return;
+    const rounded = Number(nextZoom.toFixed(4));
+    if (Math.abs(zoom - rounded) < 0.0005) return;
+    zoom = rounded;
   }
 
   function handleResize() {
@@ -271,6 +322,14 @@
       if (image.source === "blob") {
         URL.revokeObjectURL(image.url);
       }
+    }
+  });
+
+  $effect(() => {
+    if (currentIndex !== lastIndex) {
+      lastIndex = currentIndex;
+      pdfPage = 1;
+      pdfPageCount = 1;
     }
   });
 
@@ -328,6 +387,8 @@
   {isLoading}
   {statusMessage}
   {errorMessage}
+  {pdfPage}
+  {pdfPageCount}
   {handleFileChange}
   {openPicker}
   {handleDropzoneKey}
@@ -341,4 +402,9 @@
   {zoomOut}
   {resetZoom}
   {toggleFit}
+  {setPdfPageCount}
+  {prevPdfPage}
+  {nextPdfPage}
+  {handlePdfError}
+  {updatePdfFitZoom}
 />

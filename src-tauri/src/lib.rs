@@ -58,6 +58,14 @@ fn is_supported_archive(path: &Path) -> bool {
     return matches!(ext.as_str(), "zip" | "cbz");
 }
 
+fn is_supported_pdf(path: &Path) -> bool {
+    let ext = if let Some(ext) = path.extension().and_then(|ext| ext.to_str()) {
+        ext.to_ascii_lowercase()
+    } else {
+        return false;
+    };
+    return matches!(ext.as_str(), "pdf");
+}
 fn clear_last_temp_dir(state: &State<ExtractState>) -> Result<(), String> {
     let mut last_dir_guard = state
         .last_temp_dir
@@ -196,6 +204,20 @@ fn handle_file_drop(
             };
             let mut archive_items = extract_archive_bytes(bytes, &dir)?;
             extracted.append(&mut archive_items);
+        }
+
+        if is_supported_pdf(&path) {
+            let metadata = fs::metadata(&path)
+                .map_err(|err| format!("Failed to read metadata: {err}"))?;
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "document".to_string());
+            extracted.push(ExtractedFile {
+                path: path.to_string_lossy().to_string(),
+                name,
+                size: metadata.len(),
+            });
         }
     }
 
