@@ -170,7 +170,7 @@
                 nextImage();
               }
             }}
-            disabled={isPdf ? pdfPage >= (spreadMode ? Math.max(1, pdfPageCount - 1) : pdfPageCount) : (spreadMode ? currentIndex >= Math.max(0, images.length - 2) : currentIndex === images.length - 1)}
+            disabled={isPdf ? pdfPage >= pdfPageCount : currentIndex >= images.length - 1}
             aria-label={isPdf ? "Next page" : "Next image"}
           >
             ›

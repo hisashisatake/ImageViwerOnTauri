@@ -254,14 +254,11 @@
 
   function getLastImageStartIndex() {
     if (!images.length) return 0;
-    if (!spreadMode) return images.length - 1;
-    const last = images.length - 1;
-    return last - (last % 2);
+    return images.length - 1;
   }
 
   function getLastPdfStartPage() {
-    if (!spreadMode) return pdfPageCount;
-    return pdfPageCount % 2 === 0 ? Math.max(1, pdfPageCount - 1) : pdfPageCount;
+    return pdfPageCount;
   }
 
   function prevImage() {
@@ -273,8 +270,8 @@
   function nextImage() {
     if (!images.length) return;
     const step = spreadMode ? 2 : 1;
-    const lastStart = getLastImageStartIndex();
-    currentIndex = Math.min(lastStart, currentIndex + step);
+    const lastIndex = getLastImageStartIndex();
+    currentIndex = Math.min(lastIndex, currentIndex + step);
   }
 
   function zoomIn() {
@@ -302,11 +299,8 @@
 
   function setPdfPageCount(count: number) {
     pdfPageCount = Math.max(1, count);
-    const lastStart = getLastPdfStartPage();
-    pdfPage = Math.min(pdfPage, lastStart);
-    if (spreadMode && pdfPage % 2 === 0) {
-      pdfPage = Math.max(1, pdfPage - 1);
-    }
+    const lastPage = getLastPdfStartPage();
+    pdfPage = Math.min(pdfPage, lastPage);
   }
 
   function prevPdfPage() {
@@ -316,18 +310,12 @@
 
   function nextPdfPage() {
     const step = spreadMode ? 2 : 1;
-    const lastStart = getLastPdfStartPage();
-    pdfPage = Math.min(lastStart, pdfPage + step);
+    const lastPage = getLastPdfStartPage();
+    pdfPage = Math.min(lastPage, pdfPage + step);
   }
 
   function toggleSpreadMode() {
     spreadMode = !spreadMode;
-    if (spreadMode) {
-      currentIndex = Math.max(0, currentIndex - (currentIndex % 2));
-      if (pdfPage % 2 === 0) {
-        pdfPage = Math.max(1, pdfPage - 1);
-      }
-    }
   }
 
   function toggleReadingDirection() {
