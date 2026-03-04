@@ -35,7 +35,7 @@
   let pdfPageCount = $state(1);
   let lastIndex = -1;
   let spreadMode = $state(false);
-  let readingDirection = $state<"ltr" | "rtl">("ltr");
+  let readingDirection = $state<"ltr" | "rtl">("rtl");
   let currentItem = $derived(images[currentIndex] ?? null);
   let isPdf = $derived(
     currentItem

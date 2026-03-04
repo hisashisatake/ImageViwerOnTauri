@@ -332,6 +332,11 @@
               {/if}
               <span class="zoom">{Math.round(zoom * 100)}%</span>
             </div>
+            <div class="status">
+              <span>{spreadMode ? "Spread" : "Single"}</span>
+              <span>{readingDirection === "rtl" ? "Right Opening" : "Left Opening"}</span>
+              <span>{fitToWindow ? "Fit" : "Actual Size"}</span>
+            </div>
           {/if}
         </div>
       </div>
@@ -379,7 +384,7 @@
             }}
             role="menuitem"
           >
-            {readingDirection === "rtl" ? "Right Opening" : "Left Opening"}
+            {readingDirection === "rtl" ? "Left Opening" : "Right Opening"}
           </button>
           <button
             class="fab-item"
