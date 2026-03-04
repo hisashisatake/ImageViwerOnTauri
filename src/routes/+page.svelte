@@ -106,6 +106,10 @@
     isLoading = true;
     statusMessage = "";
     errorMessage = "";
+    const shouldReplace = paths.some((path) => {
+      const lower = path.toLowerCase();
+      return lower.endsWith(".zip") || lower.endsWith(".cbz") || lower.endsWith(".rar");
+    });
 
     try {
       const extracted = await invoke<ExtractedFile[]>("handle_file_drop", { paths });
@@ -118,12 +122,22 @@
         source: "file" as const,
       }));
       if (newItems.length) {
-        const startIndex = images.length;
-        images = [...images, ...newItems];
-        if (startIndex === 0) {
+        if (shouldReplace) {
+          for (const image of images) {
+            if (image.source === "blob") {
+              URL.revokeObjectURL(image.url);
+            }
+          }
+          images = [...newItems];
           currentIndex = 0;
         } else {
-          currentIndex = startIndex;
+          const startIndex = images.length;
+          images = [...images, ...newItems];
+          if (startIndex === 0) {
+            currentIndex = 0;
+          } else {
+            currentIndex = startIndex;
+          }
         }
       }
     } catch (error) {
@@ -138,6 +152,7 @@
   async function addFiles(fileList: FileList | null) {
     if (!fileList) return;
     const newItems: ImageItem[] = [];
+    let shouldReplace = false;
 
     isLoading = true;
     statusMessage = "";
@@ -173,6 +188,7 @@
           statusMessage = `Extracting ${file.name}...`;
           const extracted = await extractArchive(file);
           newItems.push(...extracted);
+          shouldReplace = true;
           continue;
         }
 
@@ -180,6 +196,7 @@
           statusMessage = `Extracting ${file.name}...`;
           const extracted = await extractRar(file);
           newItems.push(...extracted);
+          shouldReplace = true;
         }
       }
     } catch (error) {
@@ -191,6 +208,16 @@
     }
 
     if (!newItems.length) return;
+    if (shouldReplace) {
+      for (const image of images) {
+        if (image.source === "blob") {
+          URL.revokeObjectURL(image.url);
+        }
+      }
+      images = [...newItems];
+      currentIndex = 0;
+      return;
+    }
     const startIndex = images.length;
     images = [...images, ...newItems];
     if (startIndex === 0) {
