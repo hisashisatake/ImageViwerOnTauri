@@ -110,9 +110,12 @@
         source: "file" as const,
       }));
       if (newItems.length) {
+        const startIndex = images.length;
         images = [...images, ...newItems];
-        if (images.length === newItems.length) {
+        if (startIndex === 0) {
           currentIndex = 0;
+        } else {
+          currentIndex = startIndex;
         }
       }
     } catch (error) {
@@ -180,9 +183,12 @@
     }
 
     if (!newItems.length) return;
+    const startIndex = images.length;
     images = [...images, ...newItems];
-    if (images.length === newItems.length) {
+    if (startIndex === 0) {
       currentIndex = 0;
+    } else {
+      currentIndex = startIndex;
     }
   }
 
