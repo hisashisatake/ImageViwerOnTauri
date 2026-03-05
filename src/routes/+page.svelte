@@ -37,6 +37,7 @@
   let readingDirection = $state<"ltr" | "rtl">("rtl");
   let spreadStartPage = $state(-1);
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  let settingsReady = false;
   let currentItem = $derived(images[currentIndex] ?? null);
   let isPdf = $derived(
     currentItem
@@ -108,6 +109,8 @@
       }
     } catch (error) {
       console.debug("loadSettings: failed", error);
+    } finally {
+      settingsReady = true;
     }
   }
 
@@ -129,6 +132,7 @@
   }
 
   function scheduleSaveSettings() {
+    if (!settingsReady) return;
     if (saveTimer) {
       clearTimeout(saveTimer);
     }
@@ -612,10 +616,11 @@
 
   $effect(() => {
     spreadStartPage;
-    spreadMode;
     readingDirection;
     fitToWindow;
-    zoom;
+    if (!fitToWindow) {
+      zoom;
+    }
     scheduleSaveSettings();
   });
 
@@ -697,6 +702,7 @@
   {pdfPageCount}
   {spreadStartPage}
   {spreadMode}
+  {spreadEnabled}
   {readingDirection}
   {handleFileChange}
   {handleDropzoneKey}

@@ -25,6 +25,7 @@
   export let pdfPageCount: number;
   export let spreadStartPage: number;
   export let spreadMode: boolean;
+  export let spreadEnabled: boolean;
   export let readingDirection: "ltr" | "rtl";
 
   export let handleFileChange: (event: Event) => void | Promise<void>;
@@ -334,7 +335,7 @@
               <span class="zoom">{Math.round(zoom * 100)}%</span>
             </div>
             <div class="status">
-              <span>{spreadMode ? "Spread" : "Single"}</span>
+              <span>{spreadEnabled ? "Spread" : "Single"}</span>
               <span>{readingDirection === "rtl" ? "Right Opening" : "Left Opening"}</span>
               <span>{fitToWindow ? "Fit" : "Actual Size"}</span>
             </div>
