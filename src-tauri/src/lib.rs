@@ -6,7 +6,7 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{command, State, Window};
+use tauri::{command, AppHandle, Manager, State, Window};
 use unrar::Archive;
 use zip::ZipArchive;
 
@@ -351,6 +351,41 @@ fn handle_file_drop(
     Ok(extracted)
 }
 
+fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|err| format!("Failed to resolve current exe: {err}"))?;
+    if let Some(dir) = exe_path.parent() {
+        return Ok(dir.join("settings.ini"));
+    }
+    let dir = app
+        .path()
+        .executable_dir()
+        .map_err(|err| format!("Failed to resolve executable directory: {err}"))?;
+    Ok(dir.join("settings.ini"))
+}
+
+#[command]
+fn load_settings(app: AppHandle) -> Result<Option<String>, String> {
+    let path = settings_path(&app)?;
+    println!("load_settings: path={}", path.display());
+    if !path.exists() {
+        return Ok(None);
+    }
+    let contents = fs::read_to_string(&path)
+        .map_err(|err| format!("Failed to read settings: {err}"))?;
+    println!("load_settings: loaded {} bytes", contents.len());
+    Ok(Some(contents))
+}
+
+#[command]
+fn save_settings(app: AppHandle, contents: String) -> Result<(), String> {
+    let path = settings_path(&app)?;
+    println!("save_settings: path={} bytes={}", path.display(), contents.len());
+    fs::write(path, contents).map_err(|err| format!("Failed to save settings: {err}"))?;
+    println!("save_settings: done");
+    Ok(())
+}
+
 #[command]
 fn toggle_fullscreen(window: Window) -> Result<bool, String> {
     let is_fullscreen = window
@@ -372,7 +407,9 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             extract_archive,
             extract_rar,
             handle_file_drop,
-            toggle_fullscreen
+            toggle_fullscreen,
+            load_settings,
+            save_settings
         ])
         .run(context)
         .expect("error while running tauri application");

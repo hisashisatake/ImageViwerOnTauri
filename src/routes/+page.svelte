@@ -36,6 +36,7 @@
   let lastIndex = -1;
   let spreadMode = $state(false);
   let readingDirection = $state<"ltr" | "rtl">("rtl");
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let currentItem = $derived(images[currentIndex] ?? null);
   let isPdf = $derived(
     currentItem
@@ -43,6 +44,74 @@
       : false,
   );
   let isFullscreen = $state(false);
+  function parseIni(text: string) {
+    const result: Record<string, string> = {};
+    for (const rawLine of text.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+      if (line.startsWith("[")) continue;
+      const splitIndex = line.indexOf("=");
+      if (splitIndex === -1) continue;
+      const key = line.slice(0, splitIndex).trim();
+      const value = line.slice(splitIndex + 1).trim();
+      if (key) result[key] = value;
+    }
+    return result;
+  }
+
+  async function loadSettings() {
+    try {
+      console.debug("loadSettings: start");
+      const text = await invoke<string | null>("load_settings");
+      if (!text) return;
+      const data = parseIni(text);
+      if (data.spreadMode != null) {
+        spreadMode = data.spreadMode === "true";
+      }
+      if (data.readingDirection === "ltr" || data.readingDirection === "rtl") {
+        readingDirection = data.readingDirection;
+      }
+      if (data.fitToWindow != null) {
+        fitToWindow = data.fitToWindow === "true";
+      }
+      if (data.zoom != null) {
+        const parsed = Number(data.zoom);
+        if (Number.isFinite(parsed)) {
+          zoom = parsed;
+        }
+      }
+    } catch (error) {
+      console.debug("loadSettings: failed", error);
+    }
+  }
+
+  async function saveSettings() {
+    try {
+      console.debug("saveSettings: start");
+      const lines = [
+        "[viewer]",
+        `spreadMode=${spreadMode}`,
+        `readingDirection=${readingDirection}`,
+        `fitToWindow=${fitToWindow}`,
+        `zoom=${zoom}`,
+      ];
+      await invoke("save_settings", { contents: lines.join("\n") });
+      console.debug("saveSettings: done");
+    } catch (error) {
+      console.error("saveSettings: failed", error);
+    }
+  }
+
+  function scheduleSaveSettings() {
+    if (saveTimer) {
+      clearTimeout(saveTimer);
+    }
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      void saveSettings();
+    }, 300);
+  }
+
 
   function isArchiveFile(file: File) {
     const lowerName = file.name.toLowerCase();
@@ -464,6 +533,7 @@
         URL.revokeObjectURL(image.url);
       }
     }
+    void saveSettings();
   });
 
   $effect(() => {
@@ -474,8 +544,18 @@
     }
   });
 
+  $effect(() => {
+    spreadMode;
+    readingDirection;
+    fitToWindow;
+    zoom;
+    scheduleSaveSettings();
+  });
+
+
 
   onMount(() => {
+    void loadSettings();
     const preventDefaults = (event: DragEvent) => {
       event.preventDefault();
     };
@@ -485,7 +565,8 @@
     window.addEventListener("dragleave", handleDragLeave);
     window.addEventListener("keydown", handleGlobalKey);
     let unlistenDragDrop: (() => void) | null = null;
-    getCurrentWindow()
+    const appWindow = getCurrentWindow();
+    appWindow
       .onDragDropEvent(async (event) => {
         const payload = event.payload;
         if (payload.type === "over") {
@@ -504,6 +585,10 @@
       .then((fn) => {
         unlistenDragDrop = fn;
       });
+    const handleBeforeUnload = () => {
+      void saveSettings();
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
 
     return () => {
       window.removeEventListener("dragover", preventDefaults);
@@ -512,6 +597,7 @@
       window.removeEventListener("dragleave", handleDragLeave);
       window.removeEventListener("keydown", handleGlobalKey);
       unlistenDragDrop?.();
+      window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   });
 </script>
