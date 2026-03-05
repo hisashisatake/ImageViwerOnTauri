@@ -36,8 +36,8 @@
   let lastIndex = -1;
   let readingDirection = $state<"ltr" | "rtl">("rtl");
   let spreadStartPage = $state(-1);
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let settingsReady = false;
+  let lastSavedSnapshot: string | null = null;
   let currentItem = $derived(images[currentIndex] ?? null);
   let isPdf = $derived(
     currentItem
@@ -110,12 +110,26 @@
     } catch (error) {
       console.debug("loadSettings: failed", error);
     } finally {
+      lastSavedSnapshot = JSON.stringify(getSettingsSnapshot());
       settingsReady = true;
     }
   }
 
+  function getSettingsSnapshot() {
+    return {
+      spreadStartPage,
+      readingDirection,
+      fitToWindow,
+      zoom: fitToWindow ? null : zoom,
+    };
+  }
+
   async function saveSettings() {
     try {
+      const snapshot = JSON.stringify(getSettingsSnapshot());
+      if (snapshot === lastSavedSnapshot) {
+        return;
+      }
       console.debug("saveSettings: start");
       const lines = [
         "[viewer]",
@@ -125,6 +139,7 @@
         `zoom=${zoom}`,
       ];
       await invoke("save_settings", { contents: lines.join("\n") });
+      lastSavedSnapshot = snapshot;
       console.debug("saveSettings: done");
     } catch (error) {
       console.error("saveSettings: failed", error);
@@ -133,13 +148,7 @@
 
   function scheduleSaveSettings() {
     if (!settingsReady) return;
-    if (saveTimer) {
-      clearTimeout(saveTimer);
-    }
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      void saveSettings();
-    }, 300);
+    void saveSettings();
   }
 
 
