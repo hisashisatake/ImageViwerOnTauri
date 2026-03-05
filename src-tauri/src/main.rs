@@ -3,5 +3,5 @@
 
 fn main() {
     let context = tauri::generate_context!("tauri.conf.json");
-    c_userssatakeappdatalocaltemptauri_svelte_app_lib::run(context)
+    image_viewer_on_tauri_lib::run(context)
 }
