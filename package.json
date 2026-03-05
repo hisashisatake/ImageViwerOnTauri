@@ -1,6 +1,6 @@
 {
   "name": "image-viewer-on-tauri",
-  "version": "0.1.0",
+  "version": "1.0.1",
   "description": "Tauri image viewer built with Svelte",
   "type": "module",
   "scripts": {
