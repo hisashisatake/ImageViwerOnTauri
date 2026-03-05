@@ -1,0 +1,35 @@
+{
+  "name": "image-viewer-on-tauri",
+  "version": "0.1.0",
+  "description": "Tauri image viewer built with Svelte",
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+    "tauri": "tauri"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@skeletonlabs/skeleton": "^4.12.1",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "pdfjs-dist": "^5.5.207"
+  },
+  "devDependencies": {
+    "@skeletonlabs/tw-plugin": "^0.4.1",
+    "@sveltejs/adapter-static": "^3.0.6",
+    "@sveltejs/kit": "^2.9.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tailwindcss/postcss": "^4.2.1",
+    "@tauri-apps/cli": "^2",
+    "postcss": "^8.5.8",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "tailwindcss": "^4.2.1",
+    "typescript": "~5.6.2",
+    "vite": "^6.0.3"
+  }
+}
