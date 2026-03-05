@@ -23,6 +23,7 @@
   export let imageReloadKey: boolean;
   export let pdfPage: number;
   export let pdfPageCount: number;
+  export let spreadStartPage: number;
   export let spreadMode: boolean;
   export let readingDirection: "ltr" | "rtl";
 
@@ -373,7 +374,7 @@
             }}
             role="menuitem"
           >
-            {spreadMode ? "Single Page" : "Spread"}
+            {spreadStartPage >= 1 ? "Single Page" : "Spread"}
           </button>
           <button
             class="fab-item"

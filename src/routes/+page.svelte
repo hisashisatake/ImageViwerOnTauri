@@ -34,8 +34,8 @@
   let pdfPage = $state(1);
   let pdfPageCount = $state(1);
   let lastIndex = -1;
-  let spreadMode = $state(false);
   let readingDirection = $state<"ltr" | "rtl">("rtl");
+  let spreadStartPage = $state(-1);
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let currentItem = $derived(images[currentIndex] ?? null);
   let isPdf = $derived(
@@ -43,6 +43,21 @@
       ? currentItem.type === "application/pdf" || currentItem.name.toLowerCase().endsWith(".pdf")
       : false,
   );
+  let spreadEnabled = $derived(spreadStartPage >= 1);
+  let spreadStartIndex = $derived(
+    spreadEnabled
+      ? Math.min(images.length - 1, Math.max(0, spreadStartPage - 1))
+      : 0,
+  );
+  let pdfSpreadStartPage = $derived(
+    spreadEnabled
+      ? Math.min(Math.max(1, spreadStartPage), Math.max(1, pdfPageCount))
+      : 1,
+  );
+  let isBeforeSpreadStart = $derived(
+    spreadEnabled && (isPdf ? pdfPage < pdfSpreadStartPage : currentIndex < spreadStartIndex),
+  );
+  let spreadMode = $derived(spreadEnabled && !isBeforeSpreadStart);
   let isFullscreen = $state(false);
   function parseIni(text: string) {
     const result: Record<string, string> = {};
@@ -65,8 +80,19 @@
       const text = await invoke<string | null>("load_settings");
       if (!text) return;
       const data = parseIni(text);
-      if (data.spreadMode != null) {
-        spreadMode = data.spreadMode === "true";
+      if (data.spreadStartPage != null) {
+        const parsed = Math.floor(Number(data.spreadStartPage));
+        if (Number.isFinite(parsed)) {
+          spreadStartPage = parsed >= 1 ? parsed : -1;
+        }
+      } else if (data.spreadMode != null) {
+        spreadStartPage = data.spreadMode === "true" ? 1 : -1;
+      }
+      if (data.spreadStartPage != null) {
+        const parsed = Math.floor(Number(data.spreadStartPage));
+        if (Number.isFinite(parsed) && parsed >= 1) {
+          spreadStartPage = parsed;
+        }
       }
       if (data.readingDirection === "ltr" || data.readingDirection === "rtl") {
         readingDirection = data.readingDirection;
@@ -90,7 +116,7 @@
       console.debug("saveSettings: start");
       const lines = [
         "[viewer]",
-        `spreadMode=${spreadMode}`,
+        `spreadStartPage=${spreadStartPage}`,
         `readingDirection=${readingDirection}`,
         `fitToWindow=${fitToWindow}`,
         `zoom=${zoom}`,
@@ -405,6 +431,9 @@
     pdfPageCount = Math.max(1, count);
     const lastPage = getLastPdfStartPage();
     pdfPage = Math.min(pdfPage, lastPage);
+    if (spreadEnabled) {
+      alignSpreadStart();
+    }
   }
 
   function prevPdfPage() {
@@ -419,7 +448,44 @@
   }
 
   function toggleSpreadMode() {
-    spreadMode = !spreadMode;
+    if (spreadStartPage >= 1) {
+      spreadStartPage = -1;
+      return;
+    }
+    spreadStartPage = isPdf ? pdfPage : currentIndex + 1;
+    alignSpreadStart();
+  }
+
+  function alignSpreadStart() {
+    if (!spreadEnabled) return;
+
+    if (isPdf) {
+      if (pdfPageCount <= 0) return;
+      const maxPage = Math.max(1, pdfPageCount);
+      if (spreadStartPage > maxPage) {
+        spreadStartPage = maxPage;
+      }
+      const start = Math.max(1, spreadStartPage);
+      if (pdfPage < start) {
+        return;
+      }
+      const offset = (pdfPage - start) % 2;
+      if (offset === 1) {
+        pdfPage = Math.max(1, pdfPage - 1);
+      }
+      return;
+    }
+
+    if (!images.length) return;
+    const maxIndex = images.length - 1;
+    const startIndex = Math.min(maxIndex, Math.max(0, spreadStartPage - 1));
+    if (currentIndex < startIndex) {
+      return;
+    }
+    const offset = (currentIndex - startIndex) % 2;
+    if (offset === 1) {
+      currentIndex = Math.max(0, currentIndex - 1);
+    }
   }
 
   function toggleReadingDirection() {
@@ -545,11 +611,23 @@
   });
 
   $effect(() => {
+    spreadStartPage;
     spreadMode;
     readingDirection;
     fitToWindow;
     zoom;
     scheduleSaveSettings();
+  });
+
+  $effect(() => {
+    spreadStartPage;
+    spreadMode;
+    currentIndex;
+    images.length;
+    pdfPage;
+    pdfPageCount;
+    isPdf;
+    alignSpreadStart();
   });
 
 
@@ -617,6 +695,7 @@
   {errorMessage}
   {pdfPage}
   {pdfPageCount}
+  {spreadStartPage}
   {spreadMode}
   {readingDirection}
   {handleFileChange}
