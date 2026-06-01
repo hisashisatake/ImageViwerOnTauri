@@ -1,6 +1,7 @@
 use ort::{session::Session, value::Tensor as OrtTensor};
 use serde::Serialize;
 use std::{
+    collections::HashMap,
     fs,
     io::Cursor,
     path::{Path, PathBuf},
@@ -14,6 +15,11 @@ use zip::ZipArchive;
 #[derive(Default)]
 struct ExtractState {
     last_temp_dir: Mutex<Option<PathBuf>>,
+}
+
+#[derive(Default)]
+struct UpscaleSessionCache {
+    sessions: Mutex<HashMap<u32, Session>>,
 }
 
 #[derive(Serialize)]
@@ -394,20 +400,49 @@ struct UpscaleResult {
 }
 
 #[command]
-fn upscale_image(app: AppHandle, input_path: String, scale: u32) -> Result<UpscaleResult, String> {
-    let model_file = match scale {
-        4 => "realcugan_4x_conservative.onnx",
-        _ => "realcugan_2x_conservative.onnx",
-    };
-    let model_path = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("resource_dir: {e}"))?
-        .join(model_file);
+fn upscale_image(
+    app: AppHandle,
+    cache: State<UpscaleSessionCache>,
+    input_path: String,
+    scale: u32,
+) -> Result<UpscaleResult, String> {
+    let mut sessions = cache
+        .sessions
+        .lock()
+        .map_err(|_| "Failed to lock session cache".to_string())?;
 
-    if !model_path.exists() {
-        return Err(format!("Model not found: {}", model_path.display()));
+    if !sessions.contains_key(&scale) {
+        let model_file = match scale {
+            4 => "realcugan_4x_conservative.onnx",
+            _ => "realcugan_2x_conservative.onnx",
+        };
+        let model_path = app
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("resource_dir: {e}"))?
+            .join(model_file);
+
+        if !model_path.exists() {
+            return Err(format!("Model not found: {}", model_path.display()));
+        }
+
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+
+        let session = Session::builder()
+            .map_err(|e| format!("ORT builder: {e}"))?
+            .with_intra_threads(num_threads)
+            .map_err(|e| format!("Set threads: {e}"))?
+            .commit_from_file(&model_path)
+            .map_err(|e| format!("Load model: {e}"))?;
+
+        sessions.insert(scale, session);
     }
+
+    let session = sessions
+        .get_mut(&scale)
+        .ok_or("Session not found in cache")?;
 
     let img = image::open(&input_path)
         .map_err(|e| format!("Cannot open image: {e}"))?
@@ -446,11 +481,6 @@ fn upscale_image(app: AppHandle, input_path: String, scale: u32) -> Result<Upsca
 
     let tensor = OrtTensor::<f32>::from_array(([1usize, 3, pad_h, pad_w], data))
         .map_err(|e| format!("Create tensor: {e}"))?;
-
-    let mut session = Session::builder()
-        .map_err(|e| format!("ORT builder: {e}"))?
-        .commit_from_file(&model_path)
-        .map_err(|e| format!("Load model: {e}"))?;
 
     let outputs = session
         .run(ort::inputs!["input" => tensor])
@@ -512,6 +542,7 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ExtractState::default())
+        .manage(UpscaleSessionCache::default())
         .invoke_handler(tauri::generate_handler![
             extract_archive,
             extract_rar,
