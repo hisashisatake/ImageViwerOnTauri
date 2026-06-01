@@ -1,3 +1,4 @@
+use ort::{session::Session, value::Tensor as OrtTensor};
 use serde::Serialize;
 use std::{
     fs,
@@ -386,6 +387,114 @@ fn save_settings(app: AppHandle, contents: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Serialize)]
+struct UpscaleResult {
+    path: String,
+    size: u64,
+}
+
+#[command]
+fn upscale_image(app: AppHandle, input_path: String, scale: u32) -> Result<UpscaleResult, String> {
+    let model_file = match scale {
+        4 => "realcugan_4x_conservative.onnx",
+        _ => "realcugan_2x_conservative.onnx",
+    };
+    let model_path = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("resource_dir: {e}"))?
+        .join(model_file);
+
+    if !model_path.exists() {
+        return Err(format!("Model not found: {}", model_path.display()));
+    }
+
+    let img = image::open(&input_path)
+        .map_err(|e| format!("Cannot open image: {e}"))?
+        .into_rgb8();
+    let (orig_w, orig_h) = img.dimensions();
+
+    // モデルは偶数サイズのみ受け付けるため、奇数の場合は端を複製してパディング
+    let pad_h = ((orig_h + 1) & !1) as usize;
+    let pad_w = ((orig_w + 1) & !1) as usize;
+
+    let mut data = vec![0f32; 3 * pad_h * pad_w];
+    for y in 0..orig_h as usize {
+        for x in 0..orig_w as usize {
+            let p = img.get_pixel(x as u32, y as u32);
+            data[0 * pad_h * pad_w + y * pad_w + x] = p[0] as f32 / 255.0;
+            data[1 * pad_h * pad_w + y * pad_w + x] = p[1] as f32 / 255.0;
+            data[2 * pad_h * pad_w + y * pad_w + x] = p[2] as f32 / 255.0;
+        }
+    }
+    if (orig_w as usize) < pad_w {
+        for y in 0..orig_h as usize {
+            for c in 0..3usize {
+                data[c * pad_h * pad_w + y * pad_w + orig_w as usize] =
+                    data[c * pad_h * pad_w + y * pad_w + orig_w as usize - 1];
+            }
+        }
+    }
+    if (orig_h as usize) < pad_h {
+        for x in 0..pad_w {
+            for c in 0..3usize {
+                data[c * pad_h * pad_w + orig_h as usize * pad_w + x] =
+                    data[c * pad_h * pad_w + (orig_h as usize - 1) * pad_w + x];
+            }
+        }
+    }
+
+    let tensor = OrtTensor::<f32>::from_array(([1usize, 3, pad_h, pad_w], data))
+        .map_err(|e| format!("Create tensor: {e}"))?;
+
+    let mut session = Session::builder()
+        .map_err(|e| format!("ORT builder: {e}"))?
+        .commit_from_file(&model_path)
+        .map_err(|e| format!("Load model: {e}"))?;
+
+    let outputs = session
+        .run(ort::inputs!["input" => tensor])
+        .map_err(|e| format!("Inference: {e}"))?;
+
+    let (out_shape, out_data) = outputs["output"]
+        .try_extract_tensor::<f32>()
+        .map_err(|e| format!("Extract output: {e}"))?;
+
+    let out_h_total = out_shape[2] as usize;
+    let out_w_total = out_shape[3] as usize;
+    let out_h = (orig_h * scale) as usize;
+    let out_w = (orig_w * scale) as usize;
+    let mut out_img = image::RgbImage::new(out_w as u32, out_h as u32);
+    for y in 0..out_h {
+        for x in 0..out_w {
+            let r = (out_data[y * out_w_total + x] * 255.0).round().clamp(0.0, 255.0) as u8;
+            let g = (out_data[out_h_total * out_w_total + y * out_w_total + x] * 255.0).round().clamp(0.0, 255.0) as u8;
+            let b = (out_data[2 * out_h_total * out_w_total + y * out_w_total + x] * 255.0).round().clamp(0.0, 255.0) as u8;
+            out_img.put_pixel(x as u32, y as u32, image::Rgb([r, g, b]));
+        }
+    }
+
+    let temp_dir = std::env::temp_dir().join("viewer-on-tauri").join("upscaled");
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Create temp dir: {e}"))?;
+
+    let stem = Path::new(&input_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("image");
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("Time: {e}"))?
+        .as_millis();
+    let out_path = temp_dir.join(format!("{ts}_{stem}_{scale}x.png"));
+
+    out_img.save(&out_path).map_err(|e| format!("Save: {e}"))?;
+    let size = fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+    Ok(UpscaleResult {
+        path: out_path.to_string_lossy().to_string(),
+        size,
+    })
+}
+
 #[command]
 fn toggle_fullscreen(window: Window) -> Result<bool, String> {
     let is_fullscreen = window
@@ -409,7 +518,8 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             handle_file_drop,
             toggle_fullscreen,
             load_settings,
-            save_settings
+            save_settings,
+            upscale_image
         ])
         .run(context)
         .expect("error while running tauri application");
