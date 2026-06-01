@@ -12,6 +12,7 @@
     type: string;
     lastModified: number;
     source: "blob" | "file";
+    path?: string;
   };
 
   type ExtractedFile = {
@@ -27,6 +28,7 @@
   let isDragging = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
   let isLoading = $state(false);
+  let isUpscaling = $state(false);
   let statusMessage = $state("");
   let errorMessage = $state("");
   let dragCounter = 0;
@@ -191,6 +193,7 @@
       type: "image/*",
       lastModified: Date.now(),
       source: "file",
+      path: item.path,
     }));
   }
 
@@ -207,6 +210,7 @@
       type: "image/*",
       lastModified: Date.now(),
       source: "file",
+      path: item.path,
     }));
   }
 
@@ -229,6 +233,7 @@
         type: isPdfName(item.name) ? "application/pdf" : "image/*",
         lastModified: Date.now(),
         source: "file" as const,
+        path: item.path,
       }));
       if (newItems.length) {
         if (shouldReplace) {
@@ -377,6 +382,54 @@
     const files = event.dataTransfer?.files ?? null;
     if (files && files.length) {
       await addFiles(files);
+    }
+  }
+
+  async function upscaleCurrentImage(scale: 2 | 4 = 2) {
+    const item = images[currentIndex];
+    if (!item || !item.path) {
+      errorMessage = "Only local file images can be upscaled.";
+      return;
+    }
+    if (isUpscaling) return;
+    isUpscaling = true;
+    errorMessage = "";
+    try {
+      const newImages = [...images];
+      const suffix = `_${scale}x.png`;
+
+      const result = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: item.path, scale });
+      newImages[currentIndex] = {
+        name: item.name.replace(/(\.[^.]+)?$/, suffix),
+        url: convertFileSrc(result.path),
+        size: result.size,
+        type: "image/*",
+        lastModified: Date.now(),
+        source: "file",
+        path: result.path,
+      };
+
+      const secondItem = spreadMode ? images[currentIndex + 1] : null;
+      if (secondItem?.path) {
+        const result2 = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: secondItem.path, scale });
+        newImages[currentIndex + 1] = {
+          name: secondItem.name.replace(/(\.[^.]+)?$/, suffix),
+          url: convertFileSrc(result2.path),
+          size: result2.size,
+          type: "image/*",
+          lastModified: Date.now(),
+          source: "file",
+          path: result2.path,
+        };
+      }
+
+      images = newImages;
+      zoom = zoom / scale;
+    } catch (error) {
+      console.error(error);
+      errorMessage = "Upscaling failed.";
+    } finally {
+      isUpscaling = false;
     }
   }
 
@@ -705,6 +758,7 @@
   {fitToWindow}
   {isDragging}
   {isLoading}
+  {isUpscaling}
   {statusMessage}
   {errorMessage}
   {pdfPage}
@@ -732,4 +786,5 @@
   {toggleSpreadMode}
   {toggleReadingDirection}
   {toggleFullscreen}
+  {upscaleCurrentImage}
 />

@@ -9,6 +9,7 @@
     type: string;
     lastModified: number;
     source: "blob" | "file";
+    path?: string;
   };
 
   export let images: ImageItem[];
@@ -47,6 +48,8 @@
   export let toggleSpreadMode: () => void;
   export let toggleReadingDirection: () => void;
   export let toggleFullscreen: () => void;
+  export let upscaleCurrentImage: (scale: 2 | 4) => Promise<void>;
+  export let isUpscaling: boolean;
 
   let canvasEl: HTMLDivElement | null = null;
   let imgElPrimary: HTMLImageElement | null = null;
@@ -183,6 +186,12 @@
       <div class="loading-overlay" role="status" aria-live="polite">
         <div class="spinner" aria-hidden="true"></div>
         <span>{statusMessage || "Loading..."}</span>
+      </div>
+    {/if}
+    {#if isUpscaling}
+      <div class="loading-overlay" role="status" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <span>Upscaling...</span>
       </div>
     {/if}
     {#if images.length}
@@ -421,6 +430,32 @@
           >
             Zoom Out
           </button>
+          {#if currentItem && !isPdf && currentItem.path}
+            <button
+              class="fab-item"
+              onclick={(event) => {
+                event.stopPropagation();
+                closeFab();
+                void upscaleCurrentImage(2);
+              }}
+              disabled={isUpscaling}
+              role="menuitem"
+            >
+              Upscale 2x
+            </button>
+            <button
+              class="fab-item"
+              onclick={(event) => {
+                event.stopPropagation();
+                closeFab();
+                void upscaleCurrentImage(4);
+              }}
+              disabled={isUpscaling}
+              role="menuitem"
+            >
+              Upscale 4x
+            </button>
+          {/if}
         </div>
       {/if}
       <button
