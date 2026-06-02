@@ -19,7 +19,7 @@ struct ExtractState {
 
 #[derive(Default)]
 struct UpscaleSessionCache {
-    sessions: Mutex<HashMap<u32, Session>>,
+    sessions: Mutex<HashMap<(u32, String), Session>>,
 }
 
 #[derive(Serialize)]
@@ -405,13 +405,15 @@ fn upscale_image(
     cache: State<UpscaleSessionCache>,
     input_path: String,
     scale: u32,
+    provider: String,
 ) -> Result<UpscaleResult, String> {
+    let cache_key = (scale, provider.clone());
     let mut sessions = cache
         .sessions
         .lock()
         .map_err(|_| "Failed to lock session cache".to_string())?;
 
-    if !sessions.contains_key(&scale) {
+    if !sessions.contains_key(&cache_key) {
         let model_file = match scale {
             4 => "realcugan_4x_conservative.onnx",
             _ => "realcugan_2x_conservative.onnx",
@@ -430,18 +432,26 @@ fn upscale_image(
             .map(|n| n.get())
             .unwrap_or(4);
 
-        let session = Session::builder()
+        let mut builder = Session::builder()
             .map_err(|e| format!("ORT builder: {e}"))?
             .with_intra_threads(num_threads)
-            .map_err(|e| format!("Set threads: {e}"))?
+            .map_err(|e| format!("Set threads: {e}"))?;
+
+        if provider == "cuda" {
+            builder = builder
+                .with_execution_providers([ort::ep::CUDA::default().build()])
+                .map_err(|e| format!("CUDA EP: {e}"))?;
+        }
+
+        let session = builder
             .commit_from_file(&model_path)
             .map_err(|e| format!("Load model: {e}"))?;
 
-        sessions.insert(scale, session);
+        sessions.insert(cache_key.clone(), session);
     }
 
     let session = sessions
-        .get_mut(&scale)
+        .get_mut(&cache_key)
         .ok_or("Session not found in cache")?;
 
     let img = image::open(&input_path)
