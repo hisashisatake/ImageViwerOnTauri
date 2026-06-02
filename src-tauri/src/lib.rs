@@ -393,6 +393,42 @@ fn save_settings(app: AppHandle, contents: String) -> Result<(), String> {
     Ok(())
 }
 
+fn upscale_via_ncnn(app: &AppHandle, input_path: &str, scale: u32) -> Result<UpscaleResult, String> {
+    let ncnn_dir = find_ncnn_dir(app).ok_or("NCNN_NOT_INSTALLED")?;
+    let exe = ncnn_dir.join("realcugan-ncnn-vulkan.exe");
+    let temp_dir = std::env::temp_dir().join("viewer-on-tauri").join("upscaled");
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Create temp dir: {e}"))?;
+
+    let stem = Path::new(input_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("image");
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("Time: {e}"))?
+        .as_millis();
+    let out_path = temp_dir.join(format!("{ts}_{stem}_{scale}x.png"));
+
+    let status = std::process::Command::new(&exe)
+        .arg("-i").arg(input_path)
+        .arg("-o").arg(&out_path)
+        .arg("-s").arg(scale.to_string())
+        .arg("-n").arg("0")
+        .arg("-m").arg("models-se")
+        .current_dir(&ncnn_dir)
+        .status()
+        .map_err(|e| format!("Failed to run realcugan-ncnn-vulkan: {e}"))?;
+
+    if !status.success() {
+        return Err("realcugan-ncnn-vulkan failed".to_string());
+    }
+
+    let size = fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+    Ok(UpscaleResult {
+        path: out_path.to_string_lossy().to_string(),
+        size,
+    })
+}
 #[derive(Serialize)]
 struct UpscaleResult {
     path: String,
@@ -407,6 +443,10 @@ fn upscale_image(
     scale: u32,
     provider: String,
 ) -> Result<UpscaleResult, String> {
+    if provider == "vulkan" {
+        return upscale_via_ncnn(&app, &input_path, scale);
+    }
+
     let cache_key = (scale, provider.clone());
     let mut sessions = cache
         .sessions
