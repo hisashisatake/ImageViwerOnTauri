@@ -472,8 +472,25 @@
       images = newImages;
       zoom = zoom / scale;
     } catch (error) {
-      console.error(error);
-      errorMessage = "Upscaling failed.";
+      if (error === "NCNN_NOT_INSTALLED") {
+        const ok = confirm("GPU (Vulkan) upscaling requires additional files (~46MB).\nDownload now?");
+        if (ok) {
+          try {
+            statusMessage = "Downloading...";
+            isUpscaling = true;
+            await invoke("download_ncnn_vulkan");
+            isUpscaling = false;
+            statusMessage = "";
+            void upscaleCurrentImage(scale);
+          } catch (dlError) {
+            console.error(dlError);
+            errorMessage = "Download failed.";
+          }
+        }
+      } else {
+        console.error(error);
+        errorMessage = "Upscaling failed.";
+      }
     } finally {
       isUpscaling = false;
     }
