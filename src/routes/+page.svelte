@@ -835,4 +835,5 @@
   {upscaleCurrentImage}
   {upscaleProvider}
   {toggleUpscaleProvider}
+  {revertToOriginal}
 />
