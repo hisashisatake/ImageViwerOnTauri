@@ -131,6 +131,10 @@ fn create_extract_dir(state: &State<ExtractState>, archive_name: &str) -> Result
     Ok(extract_dir)
 }
 
+fn sort_by_path(files: &mut Vec<ExtractedFile>) {
+    files.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+}
+
 fn extract_archive_bytes(bytes: Vec<u8>, extract_dir: &Path) -> Result<Vec<ExtractedFile>, String> {
     let reader = Cursor::new(bytes);
     let mut archive = ZipArchive::new(reader)
@@ -246,7 +250,7 @@ fn extract_rar_file(path: &Path, extract_dir: &Path) -> Result<Vec<ExtractedFile
         });
     }
 
-    extracted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    sort_by_path(&mut extracted);
     Ok(extracted)
 }
 
@@ -259,7 +263,7 @@ fn extract_archive(
     clear_last_temp_dir(&state)?;
     let extract_dir = create_extract_dir(&state, &archive_name)?;
     let mut extracted = extract_archive_bytes(bytes, &extract_dir)?;
-    extracted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    sort_by_path(&mut extracted);
     Ok(extracted)
 }
 
@@ -354,7 +358,7 @@ fn handle_file_drop(
         }
     }
 
-    extracted.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    sort_by_path(&mut extracted);
     Ok(extracted)
 }
 
