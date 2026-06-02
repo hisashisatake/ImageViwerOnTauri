@@ -13,6 +13,8 @@
     lastModified: number;
     source: "blob" | "file";
     path?: string;
+    originalPath?: string;
+    originalSize?: number;
   };
 
   type ExtractedFile = {
@@ -29,7 +31,7 @@
   let fileInput = $state<HTMLInputElement | null>(null);
   let isLoading = $state(false);
   let isUpscaling = $state(false);
-  let upscaleProvider = $state<"cpu" | "cuda">("cpu");
+  let upscaleProvider = $state<"cpu" | "cuda" | "vulkan">("cpu");
   let statusMessage = $state("");
   let errorMessage = $state("");
   let dragCounter = 0;
@@ -104,8 +106,8 @@
       if (data.fitToWindow != null) {
         fitToWindow = data.fitToWindow === "true";
       }
-      if (data.upscaleProvider === "cuda") {
-        upscaleProvider = "cuda";
+      if (data.upscaleProvider === "cuda" || data.upscaleProvider === "vulkan") {
+        upscaleProvider = data.upscaleProvider;
       }
       if (data.zoom != null) {
         const parsed = Number(data.zoom);
@@ -391,13 +393,33 @@
     }
   }
 
+  function revertToOriginal() {
+    const item = images[currentIndex];
+    if (!item?.originalPath) return;
+    const newImages = [...images];
+    newImages[currentIndex] = {
+      ...item,
+      url: convertFileSrc(item.originalPath),
+      path: item.originalPath,
+      size: item.originalSize ?? item.size,
+      name: item.originalPath.split(/[\\/]/).pop() ?? item.name,
+      originalPath: undefined,
+      originalSize: undefined,
+    };
+    images = newImages;
+    fitToWindow = true;
+  }
+
   function toggleUpscaleProvider() {
-    upscaleProvider = upscaleProvider === "cpu" ? "cuda" : "cpu";
+    if (upscaleProvider === "cpu") upscaleProvider = "cuda";
+    else if (upscaleProvider === "cuda") upscaleProvider = "vulkan";
+    else upscaleProvider = "cpu";
   }
 
   async function upscaleCurrentImage(scale: 2 | 4 = 2) {
     const item = images[currentIndex];
-    if (!item || !item.path) {
+    const inputPath = item?.originalPath ?? item?.path;
+    if (!item || !inputPath) {
       errorMessage = "Only local file images can be upscaled.";
       return;
     }
@@ -407,29 +429,43 @@
     try {
       const newImages = [...images];
       const suffix = `_${scale}x.png`;
+      const originalPath = item.originalPath ?? item.path!;
+      const originalSize = item.originalSize ?? item.size;
 
-      const result = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: item.path, scale, provider: upscaleProvider });
+      function nameFromOriginal(origPath: string): string {
+        const fileName = origPath.split(/[\\/]/).pop() ?? "";
+        return fileName.replace(/\.[^.]+$/, "") + suffix;
+      }
+
+      const result = await invoke<{ path: string; size: number }>("upscale_image", { inputPath, scale, provider: upscaleProvider });
       newImages[currentIndex] = {
-        name: item.name.replace(/(\.[^.]+)?$/, suffix),
+        name: nameFromOriginal(originalPath),
         url: convertFileSrc(result.path),
         size: result.size,
         type: "image/*",
         lastModified: Date.now(),
         source: "file",
         path: result.path,
+        originalPath,
+        originalSize,
       };
 
       const secondItem = spreadMode ? images[currentIndex + 1] : null;
-      if (secondItem?.path) {
-        const result2 = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: secondItem.path, scale, provider: upscaleProvider });
+      const secondInputPath = secondItem?.originalPath ?? secondItem?.path;
+      if (secondItem && secondInputPath) {
+        const secondOriginalPath = secondItem.originalPath ?? secondItem.path!;
+        const secondOriginalSize = secondItem.originalSize ?? secondItem.size;
+        const result2 = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: secondInputPath, scale, provider: upscaleProvider });
         newImages[currentIndex + 1] = {
-          name: secondItem.name.replace(/(\.[^.]+)?$/, suffix),
+          name: nameFromOriginal(secondOriginalPath),
           url: convertFileSrc(result2.path),
           size: result2.size,
           type: "image/*",
           lastModified: Date.now(),
           source: "file",
           path: result2.path,
+          originalPath: secondOriginalPath,
+          originalSize: secondOriginalSize,
         };
       }
 

@@ -10,6 +10,7 @@
     lastModified: number;
     source: "blob" | "file";
     path?: string;
+    originalPath?: string;
   };
 
   export let images: ImageItem[];
@@ -50,8 +51,9 @@
   export let toggleFullscreen: () => void;
   export let upscaleCurrentImage: (scale: 2 | 4) => Promise<void>;
   export let isUpscaling: boolean;
-  export let upscaleProvider: "cpu" | "cuda";
+  export let upscaleProvider: "cpu" | "cuda" | "vulkan";
   export let toggleUpscaleProvider: () => void;
+  export let revertToOriginal: () => void;
 
   let canvasEl: HTMLDivElement | null = null;
   let imgElPrimary: HTMLImageElement | null = null;
@@ -440,8 +442,21 @@
             }}
             role="menuitem"
           >
-            Inference: {upscaleProvider === "cuda" ? "GPU (CUDA)" : "CPU"}
+            Inference: {upscaleProvider === "cuda" ? "GPU (CUDA)" : upscaleProvider === "vulkan" ? "GPU (Vulkan)" : "CPU"}
           </button>
+          {#if currentItem?.originalPath}
+            <button
+              class="fab-item"
+              onclick={(event) => {
+                event.stopPropagation();
+                closeFab();
+                revertToOriginal();
+              }}
+              role="menuitem"
+            >
+              Original
+            </button>
+          {/if}
           {#if currentItem && !isPdf && currentItem.path}
             <button
               class="fab-item"
