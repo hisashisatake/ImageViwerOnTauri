@@ -135,7 +135,7 @@ fn sort_by_path(files: &mut Vec<ExtractedFile>) {
     files.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
 }
 
-fn extract_archive_bytes(bytes: Vec<u8>, extract_dir: &Path) -> Result<Vec<ExtractedFile>, String> {
+fn extract_archive_bytes(bytes: Vec<u8>, extract_dir: &Path, recurse: bool) -> Result<Vec<ExtractedFile>, String> {
     let reader = Cursor::new(bytes);
     let mut archive = ZipArchive::new(reader)
         .map_err(|err| format!("Invalid archive: {err}"))?;
@@ -153,29 +153,52 @@ fn extract_archive_bytes(bytes: Vec<u8>, extract_dir: &Path) -> Result<Vec<Extra
         let Some(enclosed) = file.enclosed_name().map(|path| path.to_owned()) else {
             continue;
         };
-        if !is_supported_image(&enclosed) {
-            continue;
+
+        if is_supported_image(&enclosed) {
+            let out_path = extract_dir.join(&enclosed);
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|err| format!("Failed to create output dir: {err}"))?;
+            }
+            let mut outfile = fs::File::create(&out_path)
+                .map_err(|err| format!("Failed to create file: {err}"))?;
+            std::io::copy(&mut file, &mut outfile)
+                .map_err(|err| format!("Failed to extract file: {err}"))?;
+            extracted.push(ExtractedFile {
+                path: out_path.to_string_lossy().to_string(),
+                name: enclosed
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "image".to_string()),
+                size: file.size(),
+            });
+        } else if recurse && (is_supported_archive(&enclosed) || is_supported_rar(&enclosed)) {
+            let mut inner_bytes = Vec::new();
+            Read::read_to_end(&mut file, &mut inner_bytes)
+                .map_err(|err| format!("Failed to read nested archive: {err}"))?;
+            let stem = enclosed
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "archive".to_string());
+            let sub_dir = extract_dir.join(&stem);
+            fs::create_dir_all(&sub_dir)
+                .map_err(|err| format!("Failed to create sub dir: {err}"))?;
+            let mut sub = if is_supported_archive(&enclosed) {
+                extract_archive_bytes(inner_bytes, &sub_dir, false)?
+            } else {
+                let rar_name = enclosed
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "nested.rar".to_string());
+                let temp_rar = extract_dir.join(&rar_name);
+                fs::write(&temp_rar, &inner_bytes)
+                    .map_err(|err| format!("Failed to write nested rar: {err}"))?;
+                let result = extract_rar_file(&temp_rar, &sub_dir, false)?;
+                let _ = fs::remove_file(&temp_rar);
+                result
+            };
+            extracted.append(&mut sub);
         }
-
-        let out_path = extract_dir.join(&enclosed);
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to create output dir: {err}"))?;
-        }
-
-        let mut outfile = fs::File::create(&out_path)
-            .map_err(|err| format!("Failed to create file: {err}"))?;
-        std::io::copy(&mut file, &mut outfile)
-            .map_err(|err| format!("Failed to extract file: {err}"))?;
-
-        extracted.push(ExtractedFile {
-            path: out_path.to_string_lossy().to_string(),
-            name: enclosed
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "image".to_string()),
-            size: file.size(),
-        });
     }
 
     Ok(extracted)
@@ -189,10 +212,10 @@ fn extract_rar_bytes(
     let safe_name = sanitize_name(archive_name);
     let rar_path = extract_dir.join(format!("{safe_name}.rar"));
     fs::write(&rar_path, bytes).map_err(|err| format!("Failed to write temp rar: {err}"))?;
-    extract_rar_file(&rar_path, extract_dir)
+    extract_rar_file(&rar_path, extract_dir, true)
 }
 
-fn extract_rar_file(path: &Path, extract_dir: &Path) -> Result<Vec<ExtractedFile>, String> {
+fn extract_rar_file(path: &Path, extract_dir: &Path, recurse: bool) -> Result<Vec<ExtractedFile>, String> {
     let mut archive = Archive::new(path)
         .open_for_processing()
         .map_err(|err| format!("Failed to open rar: {err}"))?;
@@ -223,31 +246,51 @@ fn extract_rar_file(path: &Path, extract_dir: &Path) -> Result<Vec<ExtractedFile
             continue;
         };
 
-        if !is_supported_image(&rel_path) {
+        if is_supported_image(&rel_path) {
+            let out_path = extract_dir.join(&rel_path);
+            if let Some(parent) = out_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|err| format!("Failed to create output dir: {err}"))?;
+            }
+            archive = header
+                .extract_to(out_path.as_path())
+                .map_err(|err| format!("Failed to extract rar entry: {err}"))?;
+            extracted.push(ExtractedFile {
+                path: out_path.to_string_lossy().to_string(),
+                name: rel_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "image".to_string()),
+                size: entry_size,
+            });
+        } else if recurse && (is_supported_archive(&rel_path) || is_supported_rar(&rel_path)) {
+            let stem = rel_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "archive".to_string());
+            let sub_dir = extract_dir.join(&stem);
+            fs::create_dir_all(&sub_dir)
+                .map_err(|err| format!("Failed to create sub dir: {err}"))?;
+            let temp_path = extract_dir.join(
+                rel_path.file_name().unwrap_or(rel_path.as_os_str()),
+            );
+            archive = header
+                .extract_to(&temp_path)
+                .map_err(|err| format!("Failed to extract nested archive: {err}"))?;
+            let mut sub = if is_supported_archive(&rel_path) {
+                let bytes = fs::read(&temp_path)
+                    .map_err(|err| format!("Failed to read nested zip: {err}"))?;
+                extract_archive_bytes(bytes, &sub_dir, false)?
+            } else {
+                extract_rar_file(&temp_path, &sub_dir, false)?
+            };
+            let _ = fs::remove_file(&temp_path);
+            extracted.append(&mut sub);
+        } else {
             archive = header
                 .skip()
                 .map_err(|err| format!("Failed to skip rar entry: {err}"))?;
-            continue;
         }
-
-        let out_path = extract_dir.join(&rel_path);
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|err| format!("Failed to create output dir: {err}"))?;
-        }
-
-        archive = header
-            .extract_to(out_path.as_path())
-            .map_err(|err| format!("Failed to extract rar entry: {err}"))?;
-
-        extracted.push(ExtractedFile {
-            path: out_path.to_string_lossy().to_string(),
-            name: rel_path
-                .file_name()
-                .map(|name| name.to_string_lossy().to_string())
-                .unwrap_or_else(|| "image".to_string()),
-            size: entry_size,
-        });
     }
 
     sort_by_path(&mut extracted);
@@ -262,7 +305,7 @@ fn extract_archive(
 ) -> Result<Vec<ExtractedFile>, String> {
     clear_last_temp_dir(&state)?;
     let extract_dir = create_extract_dir(&state, &archive_name)?;
-    let mut extracted = extract_archive_bytes(bytes, &extract_dir)?;
+    let mut extracted = extract_archive_bytes(bytes, &extract_dir, true)?;
     sort_by_path(&mut extracted);
     Ok(extracted)
 }
@@ -323,7 +366,7 @@ fn handle_file_drop(
                 archive_dir = Some(new_dir.clone());
                 new_dir
             };
-            let mut archive_items = extract_archive_bytes(bytes, &dir)?;
+            let mut archive_items = extract_archive_bytes(bytes, &dir, true)?;
             extracted.append(&mut archive_items);
         }
 
@@ -339,7 +382,7 @@ fn handle_file_drop(
                 archive_dir = Some(new_dir.clone());
                 new_dir
             };
-            let mut archive_items = extract_rar_file(&path, &dir)?;
+            let mut archive_items = extract_rar_file(&path, &dir, true)?;
             extracted.append(&mut archive_items);
         }
 
