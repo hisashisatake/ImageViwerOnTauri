@@ -547,8 +547,55 @@ fn toggle_fullscreen(window: Window) -> Result<bool, String> {
     Ok(next)
 }
 
+#[cfg(target_os = "windows")]
+fn setup_cuda_paths() {
+    let mut extra: Vec<PathBuf> = Vec::new();
+
+    // CUDA_PATH は CUDA Toolkit インストーラーが自動設定する
+    if let Ok(cuda_path) = std::env::var("CUDA_PATH") {
+        extra.push(PathBuf::from(cuda_path).join("bin"));
+    }
+
+    // CUDNN_PATH は cuDNN インストーラーが自動設定する（設定済みなら使う）
+    if let Ok(cudnn_path) = std::env::var("CUDNN_PATH") {
+        extra.push(PathBuf::from(cudnn_path).join("bin"));
+    } else {
+        // 未設定の場合は %ProgramFiles%\NVIDIA\CUDNN 以下を再帰探索
+        let base = PathBuf::from(
+            std::env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".into()),
+        )
+        .join("NVIDIA")
+        .join("CUDNN");
+        if let Ok(vers) = fs::read_dir(&base) {
+            for ver in vers.flatten() {
+                if let Ok(bins) = fs::read_dir(ver.path().join("bin")) {
+                    for cuda_ver in bins.flatten() {
+                        let x64 = cuda_ver.path().join("x64");
+                        if x64.is_dir() {
+                            extra.push(x64);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let extra: Vec<_> = extra
+        .into_iter()
+        .filter(|p| p.is_dir())
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+
+    if !extra.is_empty() {
+        let current = std::env::var("PATH").unwrap_or_default();
+        std::env::set_var("PATH", format!("{};{current}", extra.join(";")));
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(context: tauri::Context<tauri::Wry>) {
+    #[cfg(target_os = "windows")]
+    setup_cuda_paths();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(ExtractState::default())
