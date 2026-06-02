@@ -30,20 +30,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": {
-      "realcugan_2x_conservative.onnx": "realcugan_2x_conservative.onnx",
-      "realcugan_4x_conservative.onnx": "realcugan_4x_conservative.onnx",
-      "realcugan-ncnn-vulkan/realcugan-ncnn-vulkan.exe": "realcugan-ncnn-vulkan/realcugan-ncnn-vulkan.exe",
-      "realcugan-ncnn-vulkan/vcomp140.dll": "realcugan-ncnn-vulkan/vcomp140.dll",
-      "realcugan-ncnn-vulkan/models-se/up2x-conservative.bin": "realcugan-ncnn-vulkan/models-se/up2x-conservative.bin",
-      "realcugan-ncnn-vulkan/models-se/up2x-conservative.param": "realcugan-ncnn-vulkan/models-se/up2x-conservative.param",
-      "realcugan-ncnn-vulkan/models-se/up4x-conservative.bin": "realcugan-ncnn-vulkan/models-se/up4x-conservative.bin",
-      "realcugan-ncnn-vulkan/models-se/up4x-conservative.param": "realcugan-ncnn-vulkan/models-se/up4x-conservative.param",
-      "realcugan-ncnn-vulkan/models-se/up2x-no-denoise.bin": "realcugan-ncnn-vulkan/models-se/up2x-no-denoise.bin",
-      "realcugan-ncnn-vulkan/models-se/up2x-no-denoise.param": "realcugan-ncnn-vulkan/models-se/up2x-no-denoise.param",
-      "realcugan-ncnn-vulkan/models-se/up4x-no-denoise.bin": "realcugan-ncnn-vulkan/models-se/up4x-no-denoise.bin",
-      "realcugan-ncnn-vulkan/models-se/up4x-no-denoise.param": "realcugan-ncnn-vulkan/models-se/up4x-no-denoise.param"
-    },
+    "resources": ["realcugan_2x_conservative.onnx", "realcugan_4x_conservative.onnx"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
