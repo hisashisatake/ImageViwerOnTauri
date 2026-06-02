@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::{
     collections::HashMap,
     fs,
-    io::Cursor,
+    io::{Cursor, Read},
     path::{Path, PathBuf},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -393,6 +393,79 @@ fn save_settings(app: AppHandle, contents: String) -> Result<(), String> {
     Ok(())
 }
 
+const NCNN_DOWNLOAD_URL: &str = "https://github.com/nihui/realcugan-ncnn-vulkan/releases/download/20220728/realcugan-ncnn-vulkan-20220728-windows.zip";
+const NCNN_ZIP_PREFIX: &str = "realcugan-ncnn-vulkan-20220728-windows";
+
+fn find_ncnn_dir(app: &AppHandle) -> Option<PathBuf> {
+    // ダウンロード済み（app_data_dir）を優先
+    if let Ok(dir) = app.path().app_data_dir() {
+        let d = dir.join("realcugan-ncnn-vulkan");
+        if d.join("realcugan-ncnn-vulkan.exe").exists() {
+            return Some(d);
+        }
+    }
+    // 次にバンドル済み（resource_dir）を確認
+    if let Ok(dir) = app.path().resource_dir() {
+        let d = dir.join("realcugan-ncnn-vulkan");
+        if d.join("realcugan-ncnn-vulkan.exe").exists() {
+            return Some(d);
+        }
+    }
+    None
+}
+
+#[command]
+fn download_ncnn_vulkan(app: AppHandle) -> Result<(), String> {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    let ncnn_dir = data_dir.join("realcugan-ncnn-vulkan");
+    let models_dir = ncnn_dir.join("models-se");
+    fs::create_dir_all(&models_dir).map_err(|e| format!("mkdir: {e}"))?;
+
+    let response = ureq::get(NCNN_DOWNLOAD_URL)
+        .call()
+        .map_err(|e| format!("Download failed: {e}"))?;
+
+    let mut zip_data = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut zip_data)
+        .map_err(|e| format!("Read failed: {e}"))?;
+
+    let cursor = std::io::Cursor::new(zip_data);
+    let mut archive = ZipArchive::new(cursor).map_err(|e| format!("ZIP: {e}"))?;
+
+    let targets = [
+        "realcugan-ncnn-vulkan.exe",
+        "vcomp140.dll",
+        "models-se/up2x-conservative.bin",
+        "models-se/up2x-conservative.param",
+        "models-se/up4x-conservative.bin",
+        "models-se/up4x-conservative.param",
+        "models-se/up2x-no-denoise.bin",
+        "models-se/up2x-no-denoise.param",
+        "models-se/up4x-no-denoise.bin",
+        "models-se/up4x-no-denoise.param",
+    ];
+
+    for rel in &targets {
+        let zip_path = format!("{NCNN_ZIP_PREFIX}/{rel}");
+        let mut entry = archive
+            .by_name(&zip_path)
+            .map_err(|e| format!("Entry {rel}: {e}"))?;
+        let dest = ncnn_dir.join(rel);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
+        }
+        let mut outfile = fs::File::create(&dest).map_err(|e| format!("Create {rel}: {e}"))?;
+        std::io::copy(&mut entry, &mut outfile).map_err(|e| format!("Write {rel}: {e}"))?;
+    }
+
+    Ok(())
+}
+
 fn upscale_via_ncnn(app: &AppHandle, input_path: &str, scale: u32) -> Result<UpscaleResult, String> {
     let ncnn_dir = find_ncnn_dir(app).ok_or("NCNN_NOT_INSTALLED")?;
     let exe = ncnn_dir.join("realcugan-ncnn-vulkan.exe");
@@ -429,6 +502,7 @@ fn upscale_via_ncnn(app: &AppHandle, input_path: &str, scale: u32) -> Result<Ups
         size,
     })
 }
+
 #[derive(Serialize)]
 struct UpscaleResult {
     path: String,
@@ -647,7 +721,8 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             toggle_fullscreen,
             load_settings,
             save_settings,
-            upscale_image
+            upscale_image,
+            download_ncnn_vulkan
         ])
         .run(context)
         .expect("error while running tauri application");
