@@ -50,6 +50,8 @@
   export let toggleFullscreen: () => void;
   export let upscaleCurrentImage: (scale: 2 | 4) => Promise<void>;
   export let isUpscaling: boolean;
+  export let upscaleProvider: "cpu" | "cuda";
+  export let toggleUpscaleProvider: () => void;
 
   let canvasEl: HTMLDivElement | null = null;
   let imgElPrimary: HTMLImageElement | null = null;
@@ -429,6 +431,16 @@
             role="menuitem"
           >
             Zoom Out
+          </button>
+          <button
+            class="fab-item"
+            onclick={(event) => {
+              event.stopPropagation();
+              toggleUpscaleProvider();
+            }}
+            role="menuitem"
+          >
+            Inference: {upscaleProvider === "cuda" ? "GPU (CUDA)" : "CPU"}
           </button>
           {#if currentItem && !isPdf && currentItem.path}
             <button

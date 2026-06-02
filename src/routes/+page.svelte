@@ -29,6 +29,7 @@
   let fileInput = $state<HTMLInputElement | null>(null);
   let isLoading = $state(false);
   let isUpscaling = $state(false);
+  let upscaleProvider = $state<"cpu" | "cuda">("cpu");
   let statusMessage = $state("");
   let errorMessage = $state("");
   let dragCounter = 0;
@@ -103,6 +104,9 @@
       if (data.fitToWindow != null) {
         fitToWindow = data.fitToWindow === "true";
       }
+      if (data.upscaleProvider === "cuda") {
+        upscaleProvider = "cuda";
+      }
       if (data.zoom != null) {
         const parsed = Number(data.zoom);
         if (Number.isFinite(parsed)) {
@@ -123,6 +127,7 @@
       readingDirection,
       fitToWindow,
       zoom: fitToWindow ? null : zoom,
+      upscaleProvider,
     };
   }
 
@@ -139,6 +144,7 @@
         `readingDirection=${readingDirection}`,
         `fitToWindow=${fitToWindow}`,
         `zoom=${zoom}`,
+        `upscaleProvider=${upscaleProvider}`,
       ];
       await invoke("save_settings", { contents: lines.join("\n") });
       lastSavedSnapshot = snapshot;
@@ -385,6 +391,10 @@
     }
   }
 
+  function toggleUpscaleProvider() {
+    upscaleProvider = upscaleProvider === "cpu" ? "cuda" : "cpu";
+  }
+
   async function upscaleCurrentImage(scale: 2 | 4 = 2) {
     const item = images[currentIndex];
     if (!item || !item.path) {
@@ -398,7 +408,7 @@
       const newImages = [...images];
       const suffix = `_${scale}x.png`;
 
-      const result = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: item.path, scale });
+      const result = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: item.path, scale, provider: upscaleProvider });
       newImages[currentIndex] = {
         name: item.name.replace(/(\.[^.]+)?$/, suffix),
         url: convertFileSrc(result.path),
@@ -411,7 +421,7 @@
 
       const secondItem = spreadMode ? images[currentIndex + 1] : null;
       if (secondItem?.path) {
-        const result2 = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: secondItem.path, scale });
+        const result2 = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: secondItem.path, scale, provider: upscaleProvider });
         newImages[currentIndex + 1] = {
           name: secondItem.name.replace(/(\.[^.]+)?$/, suffix),
           url: convertFileSrc(result2.path),
@@ -787,4 +797,6 @@
   {toggleReadingDirection}
   {toggleFullscreen}
   {upscaleCurrentImage}
+  {upscaleProvider}
+  {toggleUpscaleProvider}
 />
