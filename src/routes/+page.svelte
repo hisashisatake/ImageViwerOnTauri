@@ -216,8 +216,7 @@
       const channel = new Channel<Phase1Event>();
       channel.onmessage = (event) => {
         if (event.type === "progress") {
-          const el = document.getElementById("loading-text");
-          if (el) el.textContent = `Loading... (${event.current} / ${event.total})`;
+          statusMessage = `Loading... (${event.current} / ${event.total})`;
         } else if (event.type === "done") {
           resolve({ images: event.images, nestedArchives: event.nested_archives });
         } else if (event.type === "error") {
