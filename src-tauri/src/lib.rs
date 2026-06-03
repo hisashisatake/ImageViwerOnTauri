@@ -29,10 +29,12 @@ struct ExtractedFile {
     size: u64,
 }
 
-#[derive(Serialize)]
-struct ExtractPhase1Result {
-    images: Vec<ExtractedFile>,
-    nested_archives: Vec<String>,
+#[derive(Serialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Phase1Event {
+    Progress { current: usize, total: usize },
+    Done { images: Vec<ExtractedFile>, nested_archives: Vec<String> },
+    Error { message: String },
 }
 
 fn sanitize_name(name: &str) -> String {
@@ -173,69 +175,109 @@ fn sort_by_path(files: &mut Vec<ExtractedFile>) {
     files.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
 }
 
-// ─── フェーズ1：外側展開 ────────────────────────────────────────────────────
+fn count_rar_entries(path: &Path) -> usize {
+    let Ok(mut archive) = Archive::new(path).open_for_processing() else { return 0; };
+    let mut count = 0;
+    loop {
+        let Ok(Some(h)) = archive.read_header() else { break; };
+        if h.entry().is_file() { count += 1; }
+        let Ok(next) = h.skip() else { break; };
+        archive = next;
+    }
+    count
+}
 
-fn extract_archive_outer(bytes: Vec<u8>, extract_dir: &Path) -> Result<ExtractPhase1Result, String> {
-    let mut archive = ZipArchive::new(Cursor::new(bytes))
-        .map_err(|e| format!("Invalid archive: {e}"))?;
+fn run_archive_outer_zip(bytes: Vec<u8>, extract_dir: &Path, ch: &tauri::ipc::Channel<Phase1Event>) {
+    let mut archive = match ZipArchive::new(Cursor::new(bytes)) {
+        Ok(a) => a,
+        Err(e) => { let _ = ch.send(Phase1Event::Error { message: format!("Invalid archive: {e}") }); return; }
+    };
+    let total = archive.len();
     let mut images = Vec::new();
     let mut nested_archives = Vec::new();
+    let mut last_sent = std::time::Instant::now();
 
-    for i in 0..archive.len() {
-        let mut f = archive.by_index(i).map_err(|e| format!("Read entry: {e}"))?;
+    for i in 0..total {
+        let mut f = match archive.by_index(i) {
+            Ok(f) => f, Err(_) => continue,
+        };
         if f.is_dir() { continue; }
         let Some(enc) = f.enclosed_name().map(|p| p.to_owned()) else { continue; };
 
         if is_supported_image(&enc) {
-            let out = make_outpath(&enc, extract_dir)?;
-            let mut of = fs::File::create(&out).map_err(|e| format!("Create: {e}"))?;
-            std::io::copy(&mut f, &mut of).map_err(|e| format!("Copy: {e}"))?;
-            push_image(&out, &enc, f.size(), &mut images);
+            if let Ok(out) = make_outpath(&enc, extract_dir) {
+                if let Ok(mut of) = fs::File::create(&out) {
+                    let _ = std::io::copy(&mut f, &mut of);
+                    push_image(&out, &enc, f.size(), &mut images);
+                }
+            }
         } else if is_supported_archive(&enc) || is_supported_rar(&enc) {
             let out = extract_dir.join(entry_name(&enc));
-            let mut of = fs::File::create(&out).map_err(|e| format!("Create nested: {e}"))?;
-            std::io::copy(&mut f, &mut of).map_err(|e| format!("Copy nested: {e}"))?;
-            nested_archives.push(out.to_string_lossy().to_string());
+            if let Ok(mut of) = fs::File::create(&out) {
+                let _ = std::io::copy(&mut f, &mut of);
+                nested_archives.push(out.to_string_lossy().to_string());
+            }
+        }
+        if last_sent.elapsed().as_millis() >= 100 || i + 1 == total {
+            let _ = ch.send(Phase1Event::Progress { current: i + 1, total });
+            last_sent = std::time::Instant::now();
         }
     }
     sort_by_path(&mut images);
-    Ok(ExtractPhase1Result { images, nested_archives })
+    let _ = ch.send(Phase1Event::Done { images, nested_archives });
 }
 
-fn extract_rar_outer(path: &Path, extract_dir: &Path) -> Result<ExtractPhase1Result, String> {
-    let mut archive = Archive::new(path)
-        .open_for_processing()
-        .map_err(|e| format!("Open rar: {e}"))?;
+fn run_archive_outer_rar(path: PathBuf, extract_dir: &Path, ch: &tauri::ipc::Channel<Phase1Event>) {
+    let total = count_rar_entries(&path);
+    let mut archive = match Archive::new(&path).open_for_processing() {
+        Ok(a) => a,
+        Err(e) => { let _ = ch.send(Phase1Event::Error { message: format!("Open rar: {e}") }); return; }
+    };
     let mut images = Vec::new();
     let mut nested_archives = Vec::new();
+    let mut current = 0usize;
+    let mut last_sent = std::time::Instant::now();
 
     loop {
-        let Some(h) = archive.read_header().map_err(|e| format!("Read header: {e}"))? else { break; };
+        let Ok(Some(h)) = archive.read_header() else { break; };
         if !h.entry().is_file() {
-            archive = h.skip().map_err(|e| format!("Skip: {e}"))?;
+            let Ok(next) = h.skip() else { break; };
+            archive = next;
             continue;
         }
         let fname = h.entry().filename.clone();
         let size = h.entry().unpacked_size;
         let Some(rel) = safe_relative_path(&fname) else {
-            archive = h.skip().map_err(|e| format!("Skip: {e}"))?;
+            let Ok(next) = h.skip() else { break; };
+            archive = next;
             continue;
         };
 
         if is_supported_image(&rel) {
-            let out = make_outpath(&rel, extract_dir)?;
-            archive = h.extract_to(&out).map_err(|e| format!("Extract: {e}"))?;
-            push_image(&out, &rel, size, &mut images);
+            if let Ok(out) = make_outpath(&rel, extract_dir) {
+                if let Ok(next) = h.extract_to(&out) {
+                    push_image(&out, &rel, size, &mut images);
+                    archive = next;
+                } else { break; }
+            } else { let Ok(next) = h.skip() else { break; }; archive = next; }
         } else if is_supported_archive(&rel) || is_supported_rar(&rel) {
             let out = extract_dir.join(entry_name(&rel));
-            archive = h.extract_to(&out).map_err(|e| format!("Extract nested: {e}"))?;
-            nested_archives.push(out.to_string_lossy().to_string());
+            if let Ok(next) = h.extract_to(&out) {
+                nested_archives.push(out.to_string_lossy().to_string());
+                archive = next;
+            } else { break; }
         } else {
-            archive = h.skip().map_err(|e| format!("Skip: {e}"))?;
+            let Ok(next) = h.skip() else { break; };
+            archive = next;
+        }
+        current += 1;
+        if last_sent.elapsed().as_millis() >= 100 || current == total {
+            let _ = ch.send(Phase1Event::Progress { current, total });
+            last_sent = std::time::Instant::now();
         }
     }
     sort_by_path(&mut images);
-    Ok(ExtractPhase1Result { images, nested_archives })
+    let _ = ch.send(Phase1Event::Done { images, nested_archives });
 }
 
 // ─── フェーズ2：内側ストリーミング展開 ──────────────────────────────────────
@@ -398,28 +440,75 @@ fn extract_archive(
 }
 
 #[command]
-fn extract_archive_with_nested(
-    state: State<ExtractState>,
+async fn extract_archive_with_nested(
+    state: State<'_, ExtractState>,
     archive_name: String,
     bytes: Vec<u8>,
-) -> Result<ExtractPhase1Result, String> {
+    channel: tauri::ipc::Channel<Phase1Event>,
+) -> Result<(), String> {
     clear_last_temp_dir(&state)?;
     let extract_dir = create_extract_dir(&state, &archive_name)?;
-    extract_archive_outer(bytes, &extract_dir)
+    tauri::async_runtime::spawn_blocking(move || {
+        run_archive_outer_zip(bytes, &extract_dir, &channel);
+    });
+    Ok(())
 }
 
 #[command]
-fn extract_rar_with_nested(
-    state: State<ExtractState>,
+async fn extract_rar_with_nested(
+    state: State<'_, ExtractState>,
     archive_name: String,
     bytes: Vec<u8>,
-) -> Result<ExtractPhase1Result, String> {
+    channel: tauri::ipc::Channel<Phase1Event>,
+) -> Result<(), String> {
     clear_last_temp_dir(&state)?;
     let extract_dir = create_extract_dir(&state, &archive_name)?;
     let safe_name = sanitize_name(&archive_name);
     let rar_path = extract_dir.join(format!("{safe_name}.rar"));
-    fs::write(&rar_path, bytes).map_err(|err| format!("Failed to write temp rar: {err}"))?;
-    extract_rar_outer(&rar_path, &extract_dir)
+    fs::write(&rar_path, &bytes).map_err(|err| format!("Failed to write temp rar: {err}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_archive_outer_rar(rar_path, &extract_dir, &channel);
+    });
+    Ok(())
+}
+
+#[command]
+async fn extract_archive_from_path(
+    state: State<'_, ExtractState>,
+    path: String,
+    channel: tauri::ipc::Channel<Phase1Event>,
+) -> Result<(), String> {
+    let archive_path = PathBuf::from(&path);
+    let name = archive_path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "archive".to_string());
+    clear_last_temp_dir(&state)?;
+    let extract_dir = create_extract_dir(&state, &name)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        match fs::read(&archive_path) {
+            Ok(bytes) => run_archive_outer_zip(bytes, &extract_dir, &channel),
+            Err(e) => { let _ = channel.send(Phase1Event::Error { message: format!("Read: {e}") }); }
+        }
+    });
+    Ok(())
+}
+
+#[command]
+async fn extract_rar_from_path(
+    state: State<'_, ExtractState>,
+    path: String,
+    channel: tauri::ipc::Channel<Phase1Event>,
+) -> Result<(), String> {
+    let archive_path = PathBuf::from(&path);
+    let name = archive_path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "archive".to_string());
+    clear_last_temp_dir(&state)?;
+    let extract_dir = create_extract_dir(&state, &name)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        run_archive_outer_rar(archive_path, &extract_dir, &channel);
+    });
+    Ok(())
 }
 
 #[command]
@@ -754,10 +843,13 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ExtractState::default())
         .manage(UpscaleSessionCache::default())
         .invoke_handler(tauri::generate_handler![
             extract_archive,
+            extract_archive_from_path,
+            extract_rar_from_path,
             extract_archive_with_nested,
             extract_rar_with_nested,
             extract_nested_streaming,
