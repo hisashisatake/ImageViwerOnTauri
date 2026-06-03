@@ -1,5 +1,6 @@
 <script lang="ts">
   import { convertFileSrc, invoke, Channel } from "@tauri-apps/api/core";
+  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onDestroy, onMount } from "svelte";
   import PageView from "./page.view.svelte";
@@ -205,20 +206,36 @@
     return name.toLowerCase().endsWith(".pdf");
   }
 
+  type Phase1Event =
+    | { type: "progress"; current: number; total: number }
+    | { type: "done"; images: ExtractedFile[]; nested_archives: string[] }
+    | { type: "error"; message: string };
+
+  function runPhase1(commandName: string, args: Record<string, unknown>): Promise<ExtractPhase1Result> {
+    return new Promise((resolve, reject) => {
+      const channel = new Channel<Phase1Event>();
+      channel.onmessage = (event) => {
+        if (event.type === "progress") {
+          const el = document.getElementById("loading-text");
+          if (el) el.textContent = `Loading... (${event.current} / ${event.total})`;
+        } else if (event.type === "done") {
+          resolve({ images: event.images, nestedArchives: event.nested_archives });
+        } else if (event.type === "error") {
+          reject(new Error(event.message));
+        }
+      };
+      invoke(commandName, { ...args, channel }).catch(reject);
+    });
+  }
+
   async function extractArchive(file: File): Promise<ExtractPhase1Result> {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    return await invoke<ExtractPhase1Result>("extract_archive_with_nested", {
-      archiveName: file.name,
-      bytes,
-    });
+    return runPhase1("extract_archive_with_nested", { archiveName: file.name, bytes });
   }
 
   async function extractRar(file: File): Promise<ExtractPhase1Result> {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    return await invoke<ExtractPhase1Result>("extract_rar_with_nested", {
-      archiveName: file.name,
-      bytes,
-    });
+    return runPhase1("extract_rar_with_nested", { archiveName: file.name, bytes });
   }
 
   async function streamNestedArchive(
@@ -230,53 +247,67 @@
     await invoke("extract_nested_streaming", { archivePath, channel });
   }
 
-  async function addDroppedPaths(paths: string[]) {
+  async function addFilesByPaths(paths: string[]) {
     if (!paths.length) return;
     isLoading = true;
     statusMessage = "";
     errorMessage = "";
-    const shouldReplace = paths.some((path) => {
-      const lower = path.toLowerCase();
-      return lower.endsWith(".zip") || lower.endsWith(".cbz") || lower.endsWith(".rar");
-    });
+
+    const newItems: ImageItem[] = [];
+    const hasArchive = paths.some((p) => /\.(zip|cbz|rar)$/i.test(p));
 
     try {
-      const extracted = await invoke<ExtractedFile[]>("handle_file_drop", { paths });
-      const newItems = extracted.map((item) => ({
-        name: item.name,
-        url: convertFileSrc(item.path),
-        size: item.size,
-        type: isPdfName(item.name) ? "application/pdf" : "image/*",
-        lastModified: Date.now(),
-        source: "file" as const,
-        path: item.path,
-      }));
-      if (newItems.length) {
-        if (shouldReplace) {
-          for (const image of images) {
-            if (image.source === "blob") {
-              URL.revokeObjectURL(image.url);
-            }
+      if (hasArchive) {
+        for (const img of images) { if (img.source === "blob") URL.revokeObjectURL(img.url); }
+        images = [];
+        currentIndex = 0;
+      }
+
+      for (const path of paths) {
+        const name = path.split(/[\\/]/).pop() ?? path;
+        const lower = path.toLowerCase();
+
+        if (/\.(png|jpg|jpeg|webp|gif|svg|bmp|avif)$/.test(lower)) {
+          newItems.push({ name, url: convertFileSrc(path), size: 0, type: "image/*", lastModified: Date.now(), source: "file", path });
+        } else if (/\.pdf$/.test(lower)) {
+          newItems.push({ name, url: convertFileSrc(path), size: 0, type: "application/pdf", lastModified: Date.now(), source: "file", path });
+        } else if (/\.(zip|cbz)$/.test(lower)) {
+          statusMessage = `Extracting ${name}...`;
+          const result = await runPhase1("extract_archive_from_path", { path });
+          newItems.push(...result.images.map(makeImageItem));
+          for (const nestedPath of result.nestedArchives) {
+            await streamNestedArchive(nestedPath, (item) => { newItems.push(item); });
           }
-          images = [...newItems];
-          currentIndex = 0;
-        } else {
-          const startIndex = images.length;
-          images = [...images, ...newItems];
-          if (startIndex === 0) {
-            currentIndex = 0;
-          } else {
-            currentIndex = startIndex;
+        } else if (/\.rar$/.test(lower)) {
+          statusMessage = `Extracting ${name}...`;
+          const result = await runPhase1("extract_rar_from_path", { path });
+          newItems.push(...result.images.map(makeImageItem));
+          for (const nestedPath of result.nestedArchives) {
+            await streamNestedArchive(nestedPath, (item) => { newItems.push(item); });
           }
         }
       }
     } catch (error) {
       console.error(error);
-      errorMessage = "Failed to read dropped files.";
+      errorMessage = "Failed to process files.";
     } finally {
       isLoading = false;
       statusMessage = "";
     }
+
+    if (!newItems.length) return;
+    if (hasArchive) {
+      images = [...newItems];
+      currentIndex = 0;
+    } else {
+      const startIndex = images.length;
+      images = [...images, ...newItems];
+      currentIndex = startIndex === 0 ? 0 : startIndex;
+    }
+  }
+
+  async function addDroppedPaths(paths: string[]) {
+    await addFilesByPaths(paths);
   }
 
   async function addFiles(fileList: FileList | null) {
@@ -660,7 +691,14 @@
   }
 
   function openPicker() {
-    fileInput?.click();
+    void openDialog({
+      multiple: true,
+      filters: [{ name: "Supported Files", extensions: ["png","jpg","jpeg","webp","gif","svg","bmp","avif","zip","cbz","rar","pdf"] }],
+    }).then((result) => {
+      if (!result) return;
+      const paths = Array.isArray(result) ? result : [result];
+      void addFilesByPaths(paths);
+    });
   }
 
   function handleDropzoneKey(event: KeyboardEvent) {

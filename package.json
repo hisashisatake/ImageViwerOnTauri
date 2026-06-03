@@ -16,6 +16,7 @@
   "dependencies": {
     "@skeletonlabs/skeleton": "^4.12.1",
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
     "@tauri-apps/plugin-opener": "^2",
     "pdfjs-dist": "^5.5.207"
   },

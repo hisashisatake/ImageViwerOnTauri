@@ -189,7 +189,7 @@
     {#if isLoading}
       <div class="loading-overlay" role="status" aria-live="polite">
         <div class="spinner" aria-hidden="true"></div>
-        <span>{statusMessage || "Loading..."}</span>
+        <span id="loading-text">{statusMessage || "Loading..."}</span>
       </div>
     {/if}
     {#if isUpscaling}
