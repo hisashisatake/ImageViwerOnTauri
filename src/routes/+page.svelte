@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+  import { convertFileSrc, invoke, Channel } from "@tauri-apps/api/core";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onDestroy, onMount } from "svelte";
   import PageView from "./page.view.svelte";
@@ -22,6 +22,23 @@
     name: string;
     size: number;
   };
+
+  type ExtractPhase1Result = {
+    images: ExtractedFile[];
+    nestedArchives: string[];
+  };
+
+  function makeImageItem(item: ExtractedFile): ImageItem {
+    return {
+      name: item.name,
+      url: convertFileSrc(item.path),
+      size: item.size,
+      type: "image/*",
+      lastModified: Date.now(),
+      source: "file",
+      path: item.path,
+    };
+  }
 
   let images = $state<ImageItem[]>([]);
   let currentIndex = $state(0);
@@ -188,38 +205,29 @@
     return name.toLowerCase().endsWith(".pdf");
   }
 
-  async function extractArchive(file: File): Promise<ImageItem[]> {
+  async function extractArchive(file: File): Promise<ExtractPhase1Result> {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const extracted = await invoke<ExtractedFile[]>("extract_archive", {
+    return await invoke<ExtractPhase1Result>("extract_archive_with_nested", {
       archiveName: file.name,
       bytes,
     });
-    return extracted.map((item) => ({
-      name: item.name,
-      url: convertFileSrc(item.path),
-      size: item.size,
-      type: "image/*",
-      lastModified: Date.now(),
-      source: "file",
-      path: item.path,
-    }));
   }
 
-  async function extractRar(file: File): Promise<ImageItem[]> {
+  async function extractRar(file: File): Promise<ExtractPhase1Result> {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const extracted = await invoke<ExtractedFile[]>("extract_rar", {
+    return await invoke<ExtractPhase1Result>("extract_rar_with_nested", {
       archiveName: file.name,
       bytes,
     });
-    return extracted.map((item) => ({
-      name: item.name,
-      url: convertFileSrc(item.path),
-      size: item.size,
-      type: "image/*",
-      lastModified: Date.now(),
-      source: "file",
-      path: item.path,
-    }));
+  }
+
+  async function streamNestedArchive(
+    archivePath: string,
+    onItem: (item: ImageItem) => void,
+  ): Promise<void> {
+    const channel = new Channel<ExtractedFile>();
+    channel.onmessage = (item) => onItem(makeImageItem(item));
+    await invoke("extract_nested_streaming", { archivePath, channel });
   }
 
   async function addDroppedPaths(paths: string[]) {
@@ -306,19 +314,23 @@
           continue;
         }
 
-        if (isArchiveFile(file)) {
+        if (isArchiveFile(file) || isRarFile(file)) {
           statusMessage = `Extracting ${file.name}...`;
-          const extracted = await extractArchive(file);
-          newItems.push(...extracted);
-          shouldReplace = true;
-          continue;
-        }
+          const result = isArchiveFile(file)
+            ? await extractArchive(file)
+            : await extractRar(file);
 
-        if (isRarFile(file)) {
-          statusMessage = `Extracting ${file.name}...`;
-          const extracted = await extractRar(file);
-          newItems.push(...extracted);
+          // フェーズ1：外側の画像をパスソート済みで追加
+          newItems.push(...result.images.map(makeImageItem));
           shouldReplace = true;
+
+          // フェーズ2：内側アーカイブをストリーミング展開
+          for (const nestedPath of result.nestedArchives) {
+            await streamNestedArchive(nestedPath, (item) => {
+              newItems.push(item);
+            });
+          }
+          continue;
         }
       }
     } catch (error) {
