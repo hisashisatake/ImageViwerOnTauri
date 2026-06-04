@@ -49,6 +49,12 @@ struct UpscaleSessionCache {
 }
 
 #[derive(Serialize, Clone)]
+struct ExtractProgress {
+    current: usize,
+    total: usize,
+}
+
+#[derive(Serialize, Clone)]
 struct ExtractedFile {
     path: String,
     name: String,
@@ -697,10 +703,12 @@ fn scan_directory(path: String) -> Result<Vec<FolderEntry>, String> {
 }
 
 // ZIP の中身をトップレベルにフラット展開（ディレクトリ構造は無視、内側ZIPは開かない）
-fn extract_zip_to_folder(bytes: Vec<u8>, extract_dir: &Path) -> Result<(), String> {
+fn extract_zip_to_folder<F: FnMut(usize, usize)>(bytes: Vec<u8>, extract_dir: &Path, mut on_progress: F) -> Result<(), String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| format!("Invalid zip: {e}"))?;
-    for i in 0..archive.len() {
+    let total = archive.len();
+    let mut last_sent = std::time::Instant::now();
+    for i in 0..total {
         let mut f = archive.by_index(i).map_err(|e| format!("Read entry: {e}"))?;
         if f.is_dir() { continue; }
         let Some(enc) = f.enclosed_name().map(|p| p.to_owned()) else { continue; };
@@ -714,14 +722,20 @@ fn extract_zip_to_folder(bytes: Vec<u8>, extract_dir: &Path) -> Result<(), Strin
         let out = extract_dir.join(&file_name);
         let mut of = fs::File::create(&out).map_err(|e| format!("Create: {e}"))?;
         std::io::copy(&mut f, &mut of).map_err(|e| format!("Copy: {e}"))?;
+        if last_sent.elapsed().as_millis() >= 100 || i + 1 == total {
+            on_progress(i + 1, total);
+            last_sent = std::time::Instant::now();
+        }
     }
     Ok(())
 }
 
 // RAR の中身をトップレベルにフラット展開（ディレクトリ構造は無視、内側ZIPは開かない）
-fn extract_rar_to_folder(path: &Path, extract_dir: &Path) -> Result<(), String> {
+fn extract_rar_to_folder<F: FnMut(usize, usize)>(path: &Path, extract_dir: &Path, mut on_progress: F) -> Result<(), String> {
     let mut archive = Archive::new(path).open_for_processing()
         .map_err(|e| format!("Open rar: {e}"))?;
+    let mut current = 0usize;
+    let mut last_sent = std::time::Instant::now();
     loop {
         let Some(h) = archive.read_header().map_err(|e| format!("Read header: {e}"))? else { break; };
         if !h.entry().is_file() {
@@ -748,7 +762,13 @@ fn extract_rar_to_folder(path: &Path, extract_dir: &Path) -> Result<(), String> 
         } else {
             archive = h.skip().map_err(|e| format!("Skip: {e}"))?;
         }
+        current += 1;
+        if last_sent.elapsed().as_millis() >= 100 {
+            on_progress(current, 0); // total = 0 = unknown
+            last_sent = std::time::Instant::now();
+        }
     }
+    if current > 0 { on_progress(current, 0); }
     Ok(())
 }
 
@@ -758,6 +778,7 @@ fn extract_rar_to_folder(path: &Path, extract_dir: &Path) -> Result<(), String> 
 async fn extract_to_temp(
     state: State<'_, ExtractState>,
     archive_path: String,
+    channel: tauri::ipc::Channel<ExtractProgress>,
 ) -> Result<String, String> {
     let archive = PathBuf::from(&archive_path);
     let stem = archive.file_stem()
@@ -785,11 +806,15 @@ async fn extract_to_temp(
     let folder_path = extract_dir.to_string_lossy().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         if is_rar {
-            extract_rar_to_folder(&archive, &extract_dir)
+            extract_rar_to_folder(&archive, &extract_dir, |c, t| {
+                let _ = channel.send(ExtractProgress { current: c, total: t });
+            })
         } else {
             fs::read(&archive)
                 .map_err(|e| format!("Read: {e}"))
-                .and_then(|bytes| extract_zip_to_folder(bytes, &extract_dir))
+                .and_then(|bytes| extract_zip_to_folder(bytes, &extract_dir, |c, t| {
+                    let _ = channel.send(ExtractProgress { current: c, total: t });
+                }))
         }
     }).await.map_err(|e| format!("Task: {e}"))??;
 
