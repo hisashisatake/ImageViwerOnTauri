@@ -801,6 +801,17 @@ fn clear_session(state: State<ExtractState>) -> Result<(), String> {
     clear_session_dirs(&state)
 }
 
+// セッション切り替え時に特定の一時フォルダを削除
+#[command]
+fn delete_single_temp_dir(state: State<ExtractState>, path: String) -> Result<(), String> {
+    let dir = PathBuf::from(&path);
+    if let Ok(mut guard) = state.session_dirs.lock() {
+        guard.retain(|d| d != &dir);
+    }
+    cleanup_temp_dir(&dir);
+    Ok(())
+}
+
 #[command]
 fn list_directory(path: String) -> Result<Vec<String>, String> {
     let dir = PathBuf::from(&path);
@@ -1055,6 +1066,7 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             scan_directory,
             extract_to_temp,
             clear_session,
+            delete_single_temp_dir,
             list_directory,
             toggle_fullscreen,
             load_settings,
