@@ -14,7 +14,26 @@ use zip::ZipArchive;
 
 #[derive(Default)]
 struct ExtractState {
-    last_temp_dir: Mutex<Option<PathBuf>>,
+    session_dirs: Mutex<Vec<PathBuf>>,
+}
+
+impl Drop for ExtractState {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.session_dirs.lock() {
+            for dir in guard.drain(..) {
+                cleanup_temp_dir(&dir);
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FolderEntry {
+    path: String,
+    name: String,
+    entry_type: String, // "image", "zip", "rar", "pdf"
+    size: u64,
 }
 
 #[derive(Default)]
@@ -106,13 +125,23 @@ fn safe_relative_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
-fn clear_last_temp_dir(state: &State<ExtractState>) -> Result<(), String> {
-    let mut last_dir_guard = state
-        .last_temp_dir
+fn cleanup_temp_dir(dir: &Path) {
+    let _ = fs::remove_dir_all(dir);
+    if let Some(parent) = dir.parent() {
+        let _ = fs::remove_dir(parent); // 空なら削除、空でなければ無視
+    }
+}
+
+fn clear_session_dirs(state: &State<ExtractState>) -> Result<(), String> {
+    let mut guard = state
+        .session_dirs
         .lock()
         .map_err(|_| "Failed to lock state".to_string())?;
-    if let Some(prev_dir) = last_dir_guard.take() {
-        let _ = fs::remove_dir_all(prev_dir);
+    println!("[clear_session] dirs to delete: {}", guard.len());
+    for dir in guard.drain(..) {
+        println!("[clear_session] deleting: {}", dir.display());
+        let result = fs::remove_dir_all(&dir);
+        println!("[clear_session] result: {:?}", result);
     }
     Ok(())
 }
@@ -132,10 +161,10 @@ fn create_extract_dir(state: &State<ExtractState>, archive_name: &str) -> Result
         .map_err(|err| format!("Failed to create temp dir: {err}"))?;
 
     let mut last_dir_guard = state
-        .last_temp_dir
+        .session_dirs
         .lock()
         .map_err(|_| "Failed to lock state".to_string())?;
-    *last_dir_guard = Some(extract_dir.clone());
+    last_dir_guard.push(extract_dir.clone());
     Ok(extract_dir)
 }
 
@@ -432,7 +461,7 @@ fn extract_archive(
     archive_name: String,
     bytes: Vec<u8>,
 ) -> Result<Vec<ExtractedFile>, String> {
-    clear_last_temp_dir(&state)?;
+    // セッション内のクリアは行わない（clear_session コマンドで一括管理）
     let extract_dir = create_extract_dir(&state, &archive_name)?;
     let mut extracted = extract_archive_bytes(bytes, &extract_dir, true)?;
     sort_by_path(&mut extracted);
@@ -446,7 +475,7 @@ async fn extract_archive_with_nested(
     bytes: Vec<u8>,
     channel: tauri::ipc::Channel<Phase1Event>,
 ) -> Result<(), String> {
-    clear_last_temp_dir(&state)?;
+    // セッション内のクリアは行わない（clear_session コマンドで一括管理）
     let extract_dir = create_extract_dir(&state, &archive_name)?;
     tauri::async_runtime::spawn_blocking(move || {
         run_archive_outer_zip(bytes, &extract_dir, &channel);
@@ -461,7 +490,7 @@ async fn extract_rar_with_nested(
     bytes: Vec<u8>,
     channel: tauri::ipc::Channel<Phase1Event>,
 ) -> Result<(), String> {
-    clear_last_temp_dir(&state)?;
+    // セッション内のクリアは行わない（clear_session コマンドで一括管理）
     let extract_dir = create_extract_dir(&state, &archive_name)?;
     let safe_name = sanitize_name(&archive_name);
     let rar_path = extract_dir.join(format!("{safe_name}.rar"));
@@ -482,11 +511,16 @@ async fn extract_archive_from_path(
     let name = archive_path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "archive".to_string());
-    clear_last_temp_dir(&state)?;
+    let stem = archive_path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "archive".to_string());
+    // セッション内のクリアは行わない（clear_session コマンドで一括管理）
     let extract_dir = create_extract_dir(&state, &name)?;
+    let extract_subdir = extract_dir.join(&stem);
+    fs::create_dir_all(&extract_subdir).map_err(|e| format!("Create subdir: {e}"))?;
     tauri::async_runtime::spawn_blocking(move || {
         match fs::read(&archive_path) {
-            Ok(bytes) => run_archive_outer_zip(bytes, &extract_dir, &channel),
+            Ok(bytes) => run_archive_outer_zip(bytes, &extract_subdir, &channel),
             Err(e) => { let _ = channel.send(Phase1Event::Error { message: format!("Read: {e}") }); }
         }
     });
@@ -503,10 +537,15 @@ async fn extract_rar_from_path(
     let name = archive_path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "archive".to_string());
-    clear_last_temp_dir(&state)?;
+    let stem = archive_path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "archive".to_string());
+    // セッション内のクリアは行わない（clear_session コマンドで一括管理）
     let extract_dir = create_extract_dir(&state, &name)?;
+    let extract_subdir = extract_dir.join(&stem);
+    fs::create_dir_all(&extract_subdir).map_err(|e| format!("Create subdir: {e}"))?;
     tauri::async_runtime::spawn_blocking(move || {
-        run_archive_outer_rar(archive_path, &extract_dir, &channel);
+        run_archive_outer_rar(archive_path, &extract_subdir, &channel);
     });
     Ok(())
 }
@@ -538,7 +577,7 @@ fn extract_rar(
     archive_name: String,
     bytes: Vec<u8>,
 ) -> Result<Vec<ExtractedFile>, String> {
-    clear_last_temp_dir(&state)?;
+    // セッション内のクリアは行わない（clear_session コマンドで一括管理）
     let extract_dir = create_extract_dir(&state, &archive_name)?;
     let extracted = extract_rar_bytes(bytes, &extract_dir, &archive_name)?;
     Ok(extracted)
@@ -549,7 +588,7 @@ fn handle_file_drop(
     state: State<ExtractState>,
     paths: Vec<String>,
 ) -> Result<Vec<ExtractedFile>, String> {
-    clear_last_temp_dir(&state)?;
+    // セッション内のクリアは行わない（clear_session コマンドで一括管理）
     let mut extracted = Vec::new();
     let mut archive_dir: Option<PathBuf> = None;
 
@@ -618,6 +657,144 @@ fn save_settings(app: AppHandle, contents: String) -> Result<(), String> {
     fs::write(path, contents).map_err(|err| format!("Failed to save settings: {err}"))?;
     println!("save_settings: done");
     Ok(())
+}
+
+// フォルダをスキャンして画像・アーカイブのソート済みリストを返す
+#[command]
+fn scan_directory(path: String) -> Result<Vec<FolderEntry>, String> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Err(format!("Not a directory: {path}"));
+    }
+    let mut entries: Vec<FolderEntry> = fs::read_dir(&dir)
+        .map_err(|e| format!("Read dir: {e}"))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .filter_map(|e| {
+            let p = e.path();
+            let et = if is_supported_image(&p) { "image" }
+                else if is_supported_archive(&p) { "zip" }
+                else if is_supported_rar(&p) { "rar" }
+                else if is_supported_pdf(&p) { "pdf" }
+                else { return None; };
+            Some(FolderEntry {
+                path: p.to_string_lossy().to_string(),
+                name: entry_name(&p),
+                entry_type: et.to_string(),
+                size: e.metadata().map(|m| m.len()).unwrap_or(0),
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| a.path.to_lowercase().cmp(&b.path.to_lowercase()));
+    Ok(entries)
+}
+
+fn extract_zip_images(bytes: Vec<u8>, extract_dir: &Path) -> Result<Vec<String>, String> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| format!("Invalid zip: {e}"))?;
+    let mut images = Vec::new();
+    for i in 0..archive.len() {
+        let mut f = archive.by_index(i).map_err(|e| format!("Read entry: {e}"))?;
+        if f.is_dir() { continue; }
+        let Some(enc) = f.enclosed_name().map(|p| p.to_owned()) else { continue; };
+        if !is_supported_image(&enc) { continue; }
+        let out = make_outpath(&enc, extract_dir)?;
+        let mut of = fs::File::create(&out).map_err(|e| format!("Create: {e}"))?;
+        std::io::copy(&mut f, &mut of).map_err(|e| format!("Copy: {e}"))?;
+        images.push(out.to_string_lossy().to_string());
+    }
+    images.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    Ok(images)
+}
+
+fn extract_rar_images(path: &Path, extract_dir: &Path) -> Result<Vec<String>, String> {
+    let mut archive = Archive::new(path).open_for_processing()
+        .map_err(|e| format!("Open rar: {e}"))?;
+    let mut images = Vec::new();
+    loop {
+        let Some(h) = archive.read_header().map_err(|e| format!("Read header: {e}"))? else { break; };
+        if !h.entry().is_file() {
+            archive = h.skip().map_err(|e| format!("Skip: {e}"))?;
+            continue;
+        }
+        let fname = h.entry().filename.clone();
+        let Some(rel) = safe_relative_path(&fname) else {
+            archive = h.skip().map_err(|e| format!("Skip: {e}"))?;
+            continue;
+        };
+        if is_supported_image(&rel) {
+            let out = make_outpath(&rel, extract_dir)?;
+            archive = h.extract_to(&out).map_err(|e| format!("Extract: {e}"))?;
+            images.push(out.to_string_lossy().to_string());
+        } else {
+            archive = h.skip().map_err(|e| format!("Skip: {e}"))?;
+        }
+    }
+    images.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    Ok(images)
+}
+
+// アーカイブをtempに展開して画像パスリストを返す（ZIP = フォルダとして扱う）
+#[command]
+async fn extract_to_temp(
+    state: State<'_, ExtractState>,
+    archive_path: String,
+) -> Result<Vec<String>, String> {
+    let archive = PathBuf::from(&archive_path);
+    let stem = archive.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "archive".to_string());
+    let file_name = archive.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "archive".to_string());
+
+    let temp_root = std::env::temp_dir().join("viewer-on-tauri");
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("Time: {e}"))?.as_millis();
+    let session_dir = temp_root.join(format!("{ts}-{}", sanitize_name(&file_name)));
+    let extract_dir = session_dir.join(&stem);
+    fs::create_dir_all(&extract_dir).map_err(|e| format!("mkdir: {e}"))?;
+
+    {
+        let mut guard = state.session_dirs.lock()
+            .map_err(|_| "Lock error".to_string())?;
+        println!("[extract_to_temp] registering: {}", session_dir.display());
+        guard.push(session_dir.clone());
+    }
+
+    let is_rar = is_supported_rar(&archive);
+    let images = tauri::async_runtime::spawn_blocking(move || {
+        if is_rar {
+            extract_rar_images(&archive, &extract_dir)
+        } else {
+            fs::read(&archive)
+                .map_err(|e| format!("Read: {e}"))
+                .and_then(|bytes| extract_zip_images(bytes, &extract_dir))
+        }
+    }).await.map_err(|e| format!("Task: {e}"))??;
+
+    Ok(images)
+}
+
+#[command]
+fn clear_session(state: State<ExtractState>) -> Result<(), String> {
+    clear_session_dirs(&state)
+}
+
+#[command]
+fn list_directory(path: String) -> Result<Vec<String>, String> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut files: Vec<String> = fs::read_dir(&dir)
+        .map_err(|e| format!("Read dir: {e}"))?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file())
+        .map(|e| e.path().to_string_lossy().to_string())
+        .collect();
+    files.sort();
+    Ok(files)
 }
 
 #[command]
@@ -855,13 +1032,30 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             extract_nested_streaming,
             extract_rar,
             handle_file_drop,
+            scan_directory,
+            extract_to_temp,
+            clear_session,
+            list_directory,
             toggle_fullscreen,
             load_settings,
             save_settings,
             upscale_image,
             download_ncnn_vulkan
         ])
-        .run(context)
-        .expect("error while running tauri application");
+        .build(context)
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                println!("[exit] cleaning up session dirs");
+                if let Some(state) = app_handle.try_state::<ExtractState>() {
+                    if let Ok(mut guard) = state.session_dirs.lock() {
+                        for dir in guard.drain(..) {
+                            println!("[exit] deleting: {}", dir.display());
+                            cleanup_temp_dir(&dir);
+                        }
+                    }
+                }
+            }
+        });
 }
 
