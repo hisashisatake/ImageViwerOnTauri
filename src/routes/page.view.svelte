@@ -11,6 +11,8 @@
     source: "blob" | "file";
     path?: string;
     originalPath?: string;
+    tempSessionDir?: string;
+    originalArchivePath?: string;
   };
 
   export let images: ImageItem[];

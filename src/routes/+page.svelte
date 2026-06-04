@@ -16,6 +16,8 @@
     path?: string;
     originalPath?: string;
     originalSize?: number;
+    tempSessionDir?: string;       // どのtemp sessionの画像か
+    originalArchivePath?: string;  // 展開元のアーカイブパス
   };
 
 
@@ -211,6 +213,7 @@
   }
 
   let extractingPending = false;
+  let activeTempDir: string | null = null; // 現在表示中のセッション（temp dir）
 
   // currentIndex がプレースホルダーを指したとき遅延展開
   $effect(() => {
@@ -232,18 +235,45 @@
     try {
       // ZIP = フォルダ: 展開してフォルダとして scan_directory で処理
       const folderPath = await invoke<string>("extract_to_temp", { archivePath });
+      const newSessionDir = folderPath.replace(/[\\/][^\\/]+$/, '');
+
+      let localIndex = index;
+
+      // 前のセッションがあれば、その画像をプレースホルダーに戻してからtempを削除
+      if (activeTempDir && activeTempDir !== newSessionDir) {
+        let firstOld = -1, lastOld = -1, oldArchivePath = '';
+        for (let i = 0; i < images.length; i++) {
+          if (images[i].tempSessionDir === activeTempDir) {
+            if (firstOld < 0) firstOld = i;
+            lastOld = i;
+            oldArchivePath = images[i].originalArchivePath ?? '';
+          }
+        }
+        if (firstOld >= 0 && oldArchivePath) {
+          const oldName = oldArchivePath.split(/[\\/]/).pop() ?? '';
+          const restored: ImageItem = { name: oldName, url: '', size: 0, type: 'archive/pending', lastModified: Date.now(), source: 'file', path: oldArchivePath };
+          images = [...images.slice(0, firstOld), restored, ...images.slice(lastOld + 1)];
+          // プレースホルダー1枚に置き換えたので、それ以降のインデックスを調整
+          if (firstOld < localIndex) {
+            localIndex -= (lastOld - firstOld);
+          }
+        }
+        await invoke("delete_single_temp_dir", { path: activeTempDir }).catch(() => {});
+      }
+
+      activeTempDir = newSessionDir;
       const entries = await invoke<FolderEntry[]>("scan_directory", { path: folderPath }).catch(() => [] as FolderEntry[]);
       const expanded: ImageItem[] = [];
       for (const entry of entries) {
         if (entry.entryType === "image") {
-          expanded.push(makeImageItemFromPath(entry.path, entry.name, entry.size));
+          expanded.push({ ...makeImageItemFromPath(entry.path, entry.name, entry.size), tempSessionDir: newSessionDir, originalArchivePath: archivePath });
         } else if (entry.entryType === "pdf") {
-          expanded.push({ name: entry.name, url: convertFileSrc(entry.path), size: entry.size, type: "application/pdf", lastModified: Date.now(), source: "file", path: entry.path });
+          expanded.push({ name: entry.name, url: convertFileSrc(entry.path), size: entry.size, type: "application/pdf", lastModified: Date.now(), source: "file", path: entry.path, tempSessionDir: newSessionDir, originalArchivePath: archivePath });
         } else if (entry.entryType === "zip" || entry.entryType === "rar") {
           expanded.push({ name: entry.name, url: "", size: entry.size, type: "archive/pending", lastModified: Date.now(), source: "file", path: entry.path });
         }
       }
-      images = [...images.slice(0, index), ...expanded, ...images.slice(index + 1)];
+      images = [...images.slice(0, localIndex), ...expanded, ...images.slice(localIndex + 1)];
       if (images.length === 0) currentIndex = 0;
     } catch (error) {
       console.error(error);
@@ -300,6 +330,7 @@
     for (const img of images) { if (img.source === "blob") URL.revokeObjectURL(img.url); }
     images = [];
     currentIndex = 0;
+    activeTempDir = null;
     await invoke("clear_session").catch(() => {});
     sessionCleared = true; // 今セッションではもう呼ばない
 
