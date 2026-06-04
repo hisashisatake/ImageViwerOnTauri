@@ -1,4 +1,11 @@
 use ort::{session::Session, value::Tensor as OrtTensor};
+
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        println!($($arg)*);
+    };
+}
 use serde::Serialize;
 use std::{
     collections::HashMap,
@@ -137,11 +144,11 @@ fn clear_session_dirs(state: &State<ExtractState>) -> Result<(), String> {
         .session_dirs
         .lock()
         .map_err(|_| "Failed to lock state".to_string())?;
-    println!("[clear_session] dirs to delete: {}", guard.len());
+    debug_log!("[clear_session] dirs to delete: {}", guard.len());
     for dir in guard.drain(..) {
-        println!("[clear_session] deleting: {}", dir.display());
+        debug_log!("[clear_session] deleting: {}", dir.display());
         let result = fs::remove_dir_all(&dir);
-        println!("[clear_session] result: {:?}", result);
+        debug_log!("[clear_session] result: {:?}", result);
     }
     Ok(())
 }
@@ -643,19 +650,19 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, String> {
 #[command]
 fn load_settings(app: AppHandle) -> Result<Option<String>, String> {
     let path = settings_path(&app)?;
-    println!("load_settings: path={}", path.display());
+    debug_log!("load_settings: path={}", path.display());
     if !path.exists() { return Ok(None); }
     let contents = fs::read_to_string(&path).map_err(|err| format!("Failed to read settings: {err}"))?;
-    println!("load_settings: loaded {} bytes", contents.len());
+    debug_log!("load_settings: loaded {} bytes", contents.len());
     Ok(Some(contents))
 }
 
 #[command]
 fn save_settings(app: AppHandle, contents: String) -> Result<(), String> {
     let path = settings_path(&app)?;
-    println!("save_settings: path={} bytes={}", path.display(), contents.len());
+    debug_log!("save_settings: path={} bytes={}", path.display(), contents.len());
     fs::write(path, contents).map_err(|err| format!("Failed to save settings: {err}"))?;
-    println!("save_settings: done");
+    debug_log!("save_settings: done");
     Ok(())
 }
 
@@ -758,7 +765,7 @@ async fn extract_to_temp(
     {
         let mut guard = state.session_dirs.lock()
             .map_err(|_| "Lock error".to_string())?;
-        println!("[extract_to_temp] registering: {}", session_dir.display());
+        debug_log!("[extract_to_temp] registering: {}", session_dir.display());
         guard.push(session_dir.clone());
     }
 
@@ -1046,11 +1053,11 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if let tauri::RunEvent::Exit = event {
-                println!("[exit] cleaning up session dirs");
+                debug_log!("[exit] cleaning up session dirs");
                 if let Some(state) = app_handle.try_state::<ExtractState>() {
                     if let Ok(mut guard) = state.session_dirs.lock() {
                         for dir in guard.drain(..) {
-                            println!("[exit] deleting: {}", dir.display());
+                            debug_log!("[exit] deleting: {}", dir.display());
                             cleanup_temp_dir(&dir);
                         }
                     }
