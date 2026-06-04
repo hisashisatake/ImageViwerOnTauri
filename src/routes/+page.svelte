@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+  import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onDestroy, onMount } from "svelte";
@@ -231,6 +231,15 @@
     }
   }
 
+  async function extractToTemp(archivePath: string): Promise<string> {
+    const channel = new Channel<{ current: number; total: number }>();
+    channel.onmessage = ({ current, total }) => {
+      const base = statusMessage.replace(/ \(\d+\/[\d?]+\)$/, "");
+      statusMessage = total > 0 ? `${base} (${current}/${total})` : `${base} (${current}/?)`;
+    };
+    return invoke<string>("extract_to_temp", { archivePath, channel });
+  }
+
   let extractingPending = false;
   let activeTempDir: string | null = null; // 現在表示中のセッション（temp dir）
 
@@ -253,7 +262,7 @@
     }
     try {
       // ZIP = フォルダ: 展開してフォルダとして scan_directory で処理
-      const folderPath = await invoke<string>("extract_to_temp", { archivePath });
+      const folderPath = await extractToTemp(archivePath);
       const newSessionDir = folderPath.replace(/[\\/][^\\/]+$/, '');
 
       let localIndex = index;
@@ -325,7 +334,7 @@
         await invoke("clear_session").catch(() => {});
         sessionCleared = true;
       }
-      const folderPath = await invoke<string>("extract_to_temp", { archivePath: path });
+      const folderPath = await extractToTemp(path);
       // 展開後のフォルダをフォルダとして扱う（内側ZIPはプレースホルダーになる）
       const entries = await invoke<FolderEntry[]>("scan_directory", { path: folderPath }).catch(() => [] as FolderEntry[]);
       for (const entry of entries) {
