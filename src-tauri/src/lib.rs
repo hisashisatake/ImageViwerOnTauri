@@ -696,28 +696,32 @@ fn scan_directory(path: String) -> Result<Vec<FolderEntry>, String> {
     Ok(entries)
 }
 
-fn extract_zip_images(bytes: Vec<u8>, extract_dir: &Path) -> Result<Vec<String>, String> {
+// ZIP の中身をトップレベルにフラット展開（ディレクトリ構造は無視、内側ZIPは開かない）
+fn extract_zip_to_folder(bytes: Vec<u8>, extract_dir: &Path) -> Result<(), String> {
     let mut archive = ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| format!("Invalid zip: {e}"))?;
-    let mut images = Vec::new();
     for i in 0..archive.len() {
         let mut f = archive.by_index(i).map_err(|e| format!("Read entry: {e}"))?;
         if f.is_dir() { continue; }
         let Some(enc) = f.enclosed_name().map(|p| p.to_owned()) else { continue; };
-        if !is_supported_image(&enc) { continue; }
-        let out = make_outpath(&enc, extract_dir)?;
+        let ok = is_supported_image(&enc)
+            || is_supported_archive(&enc)
+            || is_supported_rar(&enc)
+            || is_supported_pdf(&enc);
+        if !ok { continue; }
+        // ファイル名のみ使用（ディレクトリ構造を無視）
+        let file_name = entry_name(&enc);
+        let out = extract_dir.join(&file_name);
         let mut of = fs::File::create(&out).map_err(|e| format!("Create: {e}"))?;
         std::io::copy(&mut f, &mut of).map_err(|e| format!("Copy: {e}"))?;
-        images.push(out.to_string_lossy().to_string());
     }
-    images.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    Ok(images)
+    Ok(())
 }
 
-fn extract_rar_images(path: &Path, extract_dir: &Path) -> Result<Vec<String>, String> {
+// RAR の中身をトップレベルにフラット展開（ディレクトリ構造は無視、内側ZIPは開かない）
+fn extract_rar_to_folder(path: &Path, extract_dir: &Path) -> Result<(), String> {
     let mut archive = Archive::new(path).open_for_processing()
         .map_err(|e| format!("Open rar: {e}"))?;
-    let mut images = Vec::new();
     loop {
         let Some(h) = archive.read_header().map_err(|e| format!("Read header: {e}"))? else { break; };
         if !h.entry().is_file() {
@@ -729,24 +733,32 @@ fn extract_rar_images(path: &Path, extract_dir: &Path) -> Result<Vec<String>, St
             archive = h.skip().map_err(|e| format!("Skip: {e}"))?;
             continue;
         };
-        if is_supported_image(&rel) {
-            let out = make_outpath(&rel, extract_dir)?;
+        let ok = is_supported_image(&rel)
+            || is_supported_archive(&rel)
+            || is_supported_rar(&rel)
+            || is_supported_pdf(&rel);
+        if ok {
+            // ファイル名のみ使用（ディレクトリ構造を無視）
+            let file_name = entry_name(&rel);
+            let out = extract_dir.join(&file_name);
+            if let Some(parent) = out.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("mkdir: {e}"))?;
+            }
             archive = h.extract_to(&out).map_err(|e| format!("Extract: {e}"))?;
-            images.push(out.to_string_lossy().to_string());
         } else {
             archive = h.skip().map_err(|e| format!("Skip: {e}"))?;
         }
     }
-    images.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    Ok(images)
+    Ok(())
 }
 
-// アーカイブをtempに展開して画像パスリストを返す（ZIP = フォルダとして扱う）
+// アーカイブを temp に展開してフォルダパスを返す（ZIP = フォルダと同義）
+// 呼び出し側は scan_directory でフォルダとして扱う
 #[command]
 async fn extract_to_temp(
     state: State<'_, ExtractState>,
     archive_path: String,
-) -> Result<Vec<String>, String> {
+) -> Result<String, String> {
     let archive = PathBuf::from(&archive_path);
     let stem = archive.file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -770,17 +782,18 @@ async fn extract_to_temp(
     }
 
     let is_rar = is_supported_rar(&archive);
-    let images = tauri::async_runtime::spawn_blocking(move || {
+    let folder_path = extract_dir.to_string_lossy().to_string();
+    tauri::async_runtime::spawn_blocking(move || {
         if is_rar {
-            extract_rar_images(&archive, &extract_dir)
+            extract_rar_to_folder(&archive, &extract_dir)
         } else {
             fs::read(&archive)
                 .map_err(|e| format!("Read: {e}"))
-                .and_then(|bytes| extract_zip_images(bytes, &extract_dir))
+                .and_then(|bytes| extract_zip_to_folder(bytes, &extract_dir))
         }
     }).await.map_err(|e| format!("Task: {e}"))??;
 
-    Ok(images)
+    Ok(folder_path)
 }
 
 #[command]
