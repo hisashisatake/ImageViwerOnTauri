@@ -225,15 +225,25 @@
     extractingPending = true;
     isLoading = true;
     statusMessage = `Extracting ${images[index]?.name ?? ""}...`;
-    // 展開直前に前セッションの一時フォルダを削除
     if (!sessionCleared) {
       await invoke("clear_session").catch(() => {});
       sessionCleared = true;
     }
     try {
-      const imagePaths = await invoke<string[]>("extract_to_temp", { archivePath });
-      const extracted: ImageItem[] = imagePaths.map(p => makeImageItemFromPath(p, p.split(/[\\/]/).pop() ?? p));
-      images = [...images.slice(0, index), ...extracted, ...images.slice(index + 1)];
+      // ZIP = フォルダ: 展開してフォルダとして scan_directory で処理
+      const folderPath = await invoke<string>("extract_to_temp", { archivePath });
+      const entries = await invoke<FolderEntry[]>("scan_directory", { path: folderPath }).catch(() => [] as FolderEntry[]);
+      const expanded: ImageItem[] = [];
+      for (const entry of entries) {
+        if (entry.entryType === "image") {
+          expanded.push(makeImageItemFromPath(entry.path, entry.name, entry.size));
+        } else if (entry.entryType === "pdf") {
+          expanded.push({ name: entry.name, url: convertFileSrc(entry.path), size: entry.size, type: "application/pdf", lastModified: Date.now(), source: "file", path: entry.path });
+        } else if (entry.entryType === "zip" || entry.entryType === "rar") {
+          expanded.push({ name: entry.name, url: "", size: entry.size, type: "archive/pending", lastModified: Date.now(), source: "file", path: entry.path });
+        }
+      }
+      images = [...images.slice(0, index), ...expanded, ...images.slice(index + 1)];
       if (images.length === 0) currentIndex = 0;
     } catch (error) {
       console.error(error);
@@ -258,17 +268,18 @@
       images = [...images, { name, url: convertFileSrc(path), size: 0, type: "application/pdf", lastModified: Date.now(), source: "file", path }];
       isLoading = false;
     } else if (/\.(zip|cbz|rar)$/.test(lower)) {
-      // ZIP/RAR → 展開 → フォルダとして扱う
+      // ZIP/RAR → tempに展開 → フォルダとして scan_directory で処理（ZIP = フォルダ）
       const name = path.split(/[\\/]/).pop() ?? path;
       statusMessage = `Extracting ${name}...`;
-      // 展開直前に前セッションの一時フォルダを削除（WebView2 がファイルを解放した後）
       if (!sessionCleared) {
         await invoke("clear_session").catch(() => {});
         sessionCleared = true;
       }
-      const imagePaths = await invoke<string[]>("extract_to_temp", { archivePath: path });
-      for (const imgPath of imagePaths) {
-        images = [...images, makeImageItemFromPath(imgPath, imgPath.split(/[\\/]/).pop() ?? imgPath)];
+      const folderPath = await invoke<string>("extract_to_temp", { archivePath: path });
+      // 展開後のフォルダをフォルダとして扱う（内側ZIPはプレースホルダーになる）
+      const entries = await invoke<FolderEntry[]>("scan_directory", { path: folderPath }).catch(() => [] as FolderEntry[]);
+      for (const entry of entries) {
+        processEntry(entry);
       }
       isLoading = false;
     } else {
