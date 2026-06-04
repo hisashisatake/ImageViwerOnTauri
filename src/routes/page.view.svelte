@@ -56,6 +56,8 @@
   export let upscaleProvider: "cpu" | "cuda" | "vulkan";
   export let toggleUpscaleProvider: () => void;
   export let revertToOriginal: () => void;
+  export let sessionOffset: number;
+  export let sessionTotal: number;
 
   let canvasEl: HTMLDivElement | null = null;
   let imgElPrimary: HTMLImageElement | null = null;
@@ -344,7 +346,7 @@
                 </span>
               {:else}
                 <span class="counter">
-                  {currentIndex + 1}{spreadMode && currentIndex + 1 < images.length ? `-${Math.min(images.length, currentIndex + 2)}` : ""} / {images.length}
+                  {currentIndex - sessionOffset + 1}{spreadMode && currentIndex + 1 < images.length ? `-${Math.min(sessionTotal, currentIndex - sessionOffset + 2)}` : ""} / {sessionTotal}
                 </span>
               {/if}
               <span class="zoom">{Math.round(zoom * 100)}%</span>

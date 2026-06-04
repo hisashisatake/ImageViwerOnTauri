@@ -64,6 +64,25 @@
   );
   let spreadMode = $derived(spreadEnabled && !isBeforeSpreadStart);
   let isFullscreen = $state(false);
+
+  // 現在のフォルダ（セッション）内の位置と総数
+  let sessionOffset = $derived((() => {
+    const cur = images[currentIndex];
+    if (!cur) return 0;
+    const sd = cur.tempSessionDir;
+    for (let i = 0; i < images.length; i++) {
+      if (sd ? images[i].tempSessionDir === sd : (!images[i].tempSessionDir && images[i].type !== "archive/pending"))
+        return i;
+    }
+    return 0;
+  })());
+
+  let sessionTotal = $derived((() => {
+    const cur = images[currentIndex];
+    if (!cur) return images.length;
+    const sd = cur.tempSessionDir;
+    return images.filter(img => sd ? img.tempSessionDir === sd : (!img.tempSessionDir && img.type !== "archive/pending")).length;
+  })());
   function parseIni(text: string) {
     const result: Record<string, string> = {};
     for (const rawLine of text.split(/\r?\n/)) {
@@ -274,7 +293,8 @@
         }
       }
       images = [...images.slice(0, localIndex), ...expanded, ...images.slice(localIndex + 1)];
-      if (images.length === 0) currentIndex = 0;
+      // 新フォルダの先頭から表示
+      currentIndex = expanded.length > 0 ? localIndex : Math.min(localIndex, images.length - 1);
     } catch (error) {
       console.error(error);
       images = [...images.slice(0, index), ...images.slice(index + 1)];
@@ -935,4 +955,6 @@
   {upscaleProvider}
   {toggleUpscaleProvider}
   {revertToOriginal}
+  {sessionOffset}
+  {sessionTotal}
 />
