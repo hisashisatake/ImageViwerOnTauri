@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { convertFileSrc, invoke, Channel } from "@tauri-apps/api/core";
+  import { convertFileSrc, invoke } from "@tauri-apps/api/core";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onDestroy, onMount } from "svelte";
@@ -18,28 +18,7 @@
     originalSize?: number;
   };
 
-  type ExtractedFile = {
-    path: string;
-    name: string;
-    size: number;
-  };
 
-  type ExtractPhase1Result = {
-    images: ExtractedFile[];
-    nestedArchives: string[];
-  };
-
-  function makeImageItem(item: ExtractedFile): ImageItem {
-    return {
-      name: item.name,
-      url: convertFileSrc(item.path),
-      size: item.size,
-      type: "image/*",
-      lastModified: Date.now(),
-      source: "file",
-      path: item.path,
-    };
-  }
 
   let images = $state<ImageItem[]>([]);
   let currentIndex = $state(0);
@@ -206,85 +185,120 @@
     return name.toLowerCase().endsWith(".pdf");
   }
 
-  type Phase1Event =
-    | { type: "progress"; current: number; total: number }
-    | { type: "done"; images: ExtractedFile[]; nested_archives: string[] }
-    | { type: "error"; message: string };
+  type FolderEntry = {
+    path: string;
+    name: string;
+    entryType: string; // "image", "zip", "rar", "pdf"
+    size: number;
+  };
 
-  function runPhase1(commandName: string, args: Record<string, unknown>): Promise<ExtractPhase1Result> {
-    return new Promise((resolve, reject) => {
-      const channel = new Channel<Phase1Event>();
-      channel.onmessage = (event) => {
-        if (event.type === "progress") {
-          statusMessage = `Loading... (${event.current} / ${event.total})`;
-        } else if (event.type === "done") {
-          resolve({ images: event.images, nestedArchives: event.nested_archives });
-        } else if (event.type === "error") {
-          reject(new Error(event.message));
-        }
-      };
-      invoke(commandName, { ...args, channel }).catch(reject);
-    });
+  function makeImageItemFromPath(path: string, name: string, size = 0): ImageItem {
+    return { name, url: convertFileSrc(path), size, type: "image/*", lastModified: Date.now(), source: "file", path };
   }
 
-  async function extractArchive(file: File): Promise<ExtractPhase1Result> {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    return runPhase1("extract_archive_with_nested", { archiveName: file.name, bytes });
+  // FolderEntry 1つを処理して images に追加
+  function processEntry(entry: FolderEntry) {
+    if (entry.entryType === "image") {
+      images = [...images, makeImageItemFromPath(entry.path, entry.name, entry.size)];
+      isLoading = false;
+    } else if (entry.entryType === "pdf") {
+      images = [...images, { name: entry.name, url: convertFileSrc(entry.path), size: entry.size, type: "application/pdf", lastModified: Date.now(), source: "file", path: entry.path }];
+      isLoading = false;
+    } else if (entry.entryType === "zip" || entry.entryType === "rar") {
+      // ZIP = フォルダ: プレースホルダーとして登録（ナビゲート時に遅延展開）
+      images = [...images, { name: entry.name, url: "", size: entry.size, type: "archive/pending", lastModified: Date.now(), source: "file", path: entry.path }];
+    }
   }
 
-  async function extractRar(file: File): Promise<ExtractPhase1Result> {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    return runPhase1("extract_rar_with_nested", { archiveName: file.name, bytes });
+  let extractingPending = false;
+
+  // currentIndex がプレースホルダーを指したとき遅延展開
+  $effect(() => {
+    const item = images[currentIndex];
+    if (item?.type === "archive/pending" && item.path && !extractingPending) {
+      void expandPendingArchive(currentIndex, item.path);
+    }
+  });
+
+  async function expandPendingArchive(index: number, archivePath: string) {
+    if (extractingPending) return;
+    extractingPending = true;
+    isLoading = true;
+    statusMessage = `Extracting ${images[index]?.name ?? ""}...`;
+    // 展開直前に前セッションの一時フォルダを削除
+    if (!sessionCleared) {
+      await invoke("clear_session").catch(() => {});
+      sessionCleared = true;
+    }
+    try {
+      const imagePaths = await invoke<string[]>("extract_to_temp", { archivePath });
+      const extracted: ImageItem[] = imagePaths.map(p => makeImageItemFromPath(p, p.split(/[\\/]/).pop() ?? p));
+      images = [...images.slice(0, index), ...extracted, ...images.slice(index + 1)];
+      if (images.length === 0) currentIndex = 0;
+    } catch (error) {
+      console.error(error);
+      images = [...images.slice(0, index), ...images.slice(index + 1)];
+      if (currentIndex >= images.length) currentIndex = Math.max(0, images.length - 1);
+    } finally {
+      extractingPending = false;
+      isLoading = false;
+      statusMessage = "";
+    }
   }
 
-  async function streamNestedArchive(
-    archivePath: string,
-    onItem: (item: ImageItem) => void,
-  ): Promise<void> {
-    const channel = new Channel<ExtractedFile>();
-    channel.onmessage = (item) => onItem(makeImageItem(item));
-    await invoke("extract_nested_streaming", { archivePath, channel });
+  // パスを処理: ファイルならそのまま、フォルダなら scan_directory して各エントリを処理
+  async function processPath(path: string) {
+    const lower = path.toLowerCase();
+    if (/\.(png|jpg|jpeg|webp|gif|svg|bmp|avif)$/.test(lower)) {
+      const name = path.split(/[\\/]/).pop() ?? path;
+      images = [...images, makeImageItemFromPath(path, name)];
+      isLoading = false;
+    } else if (/\.pdf$/.test(lower)) {
+      const name = path.split(/[\\/]/).pop() ?? path;
+      images = [...images, { name, url: convertFileSrc(path), size: 0, type: "application/pdf", lastModified: Date.now(), source: "file", path }];
+      isLoading = false;
+    } else if (/\.(zip|cbz|rar)$/.test(lower)) {
+      // ZIP/RAR → 展開 → フォルダとして扱う
+      const name = path.split(/[\\/]/).pop() ?? path;
+      statusMessage = `Extracting ${name}...`;
+      // 展開直前に前セッションの一時フォルダを削除（WebView2 がファイルを解放した後）
+      if (!sessionCleared) {
+        await invoke("clear_session").catch(() => {});
+        sessionCleared = true;
+      }
+      const imagePaths = await invoke<string[]>("extract_to_temp", { archivePath: path });
+      for (const imgPath of imagePaths) {
+        images = [...images, makeImageItemFromPath(imgPath, imgPath.split(/[\\/]/).pop() ?? imgPath)];
+      }
+      isLoading = false;
+    } else {
+      // フォルダ → scan_directory して各エントリを順次処理
+      const entries = await invoke<FolderEntry[]>("scan_directory", { path }).catch(() => [] as FolderEntry[]);
+      for (const entry of entries) {
+        processEntry(entry);
+      }
+    }
   }
+
+  let sessionCleared = false;
 
   async function addFilesByPaths(paths: string[]) {
     if (!paths.length) return;
+
+    // 既存画像をクリア → 前セッションのtempを削除（ロックなし確認済み）
+    for (const img of images) { if (img.source === "blob") URL.revokeObjectURL(img.url); }
+    images = [];
+    currentIndex = 0;
+    await invoke("clear_session").catch(() => {});
+    sessionCleared = true; // 今セッションではもう呼ばない
+
     isLoading = true;
     statusMessage = "";
     errorMessage = "";
 
-    const newItems: ImageItem[] = [];
-    const hasArchive = paths.some((p) => /\.(zip|cbz|rar)$/i.test(p));
-
     try {
-      if (hasArchive) {
-        for (const img of images) { if (img.source === "blob") URL.revokeObjectURL(img.url); }
-        images = [];
-        currentIndex = 0;
-      }
-
       for (const path of paths) {
-        const name = path.split(/[\\/]/).pop() ?? path;
-        const lower = path.toLowerCase();
-
-        if (/\.(png|jpg|jpeg|webp|gif|svg|bmp|avif)$/.test(lower)) {
-          newItems.push({ name, url: convertFileSrc(path), size: 0, type: "image/*", lastModified: Date.now(), source: "file", path });
-        } else if (/\.pdf$/.test(lower)) {
-          newItems.push({ name, url: convertFileSrc(path), size: 0, type: "application/pdf", lastModified: Date.now(), source: "file", path });
-        } else if (/\.(zip|cbz)$/.test(lower)) {
-          statusMessage = `Extracting ${name}...`;
-          const result = await runPhase1("extract_archive_from_path", { path });
-          newItems.push(...result.images.map(makeImageItem));
-          for (const nestedPath of result.nestedArchives) {
-            await streamNestedArchive(nestedPath, (item) => { newItems.push(item); });
-          }
-        } else if (/\.rar$/.test(lower)) {
-          statusMessage = `Extracting ${name}...`;
-          const result = await runPhase1("extract_rar_from_path", { path });
-          newItems.push(...result.images.map(makeImageItem));
-          for (const nestedPath of result.nestedArchives) {
-            await streamNestedArchive(nestedPath, (item) => { newItems.push(item); });
-          }
-        }
+        await processPath(path);
       }
     } catch (error) {
       console.error(error);
@@ -292,16 +306,6 @@
     } finally {
       isLoading = false;
       statusMessage = "";
-    }
-
-    if (!newItems.length) return;
-    if (hasArchive) {
-      images = [...newItems];
-      currentIndex = 0;
-    } else {
-      const startIndex = images.length;
-      images = [...images, ...newItems];
-      currentIndex = startIndex === 0 ? 0 : startIndex;
     }
   }
 
@@ -345,21 +349,8 @@
         }
 
         if (isArchiveFile(file) || isRarFile(file)) {
-          statusMessage = `Extracting ${file.name}...`;
-          const result = isArchiveFile(file)
-            ? await extractArchive(file)
-            : await extractRar(file);
-
-          // フェーズ1：外側の画像をパスソート済みで追加
-          newItems.push(...result.images.map(makeImageItem));
-          shouldReplace = true;
-
-          // フェーズ2：内側アーカイブをストリーミング展開
-          for (const nestedPath of result.nestedArchives) {
-            await streamNestedArchive(nestedPath, (item) => {
-              newItems.push(item);
-            });
-          }
+          // アーカイブはバイト経由では処理できないためスキップ
+          // （Tauri ダイアログかネイティブドロップ経由で処理される）
           continue;
         }
       }
