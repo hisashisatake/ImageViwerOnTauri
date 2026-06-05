@@ -806,8 +806,9 @@ async fn extract_to_temp(
     let folder_path = extract_dir.to_string_lossy().to_string();
     tauri::async_runtime::spawn_blocking(move || {
         if is_rar {
-            extract_rar_to_folder(&archive, &extract_dir, |c, t| {
-                let _ = channel.send(ExtractProgress { current: c, total: t });
+            let total = count_rar_entries(&archive);
+            extract_rar_to_folder(&archive, &extract_dir, |c, _| {
+                let _ = channel.send(ExtractProgress { current: c, total });
             })
         } else {
             fs::read(&archive)
