@@ -939,6 +939,13 @@ struct UpscaleResult {
 }
 
 #[command]
+fn get_active_ep() -> &'static str {
+    #[cfg(feature = "cuda-ep")] { return "CUDA"; }
+    #[cfg(feature = "directml-ep")] { return "DirectML"; }
+    #[cfg(not(any(feature = "cuda-ep", feature = "directml-ep")))] { "CPU" }
+}
+
+#[command]
 fn upscale_image(
     app: AppHandle,
     cache: State<UpscaleSessionCache>,
@@ -962,11 +969,13 @@ fn upscale_image(
         let mut builder = Session::builder().map_err(|e| format!("ORT builder: {e}"))?
             .with_intra_threads(num_threads).map_err(|e| format!("Set threads: {e}"))?;
 
-        if provider == "cuda" {
-            builder = builder
-                .with_execution_providers([ort::ep::CUDA::default().build()])
-                .map_err(|e| format!("CUDA EP: {e}"))?;
+        #[cfg(feature = "cuda-ep")]
+        if provider == "gpu" {
+            builder = builder.with_execution_providers([ort::ep::CUDA::default().build(), ort::ep::CPU::default().build()]).map_err(|e| format!("CUDA EP: {e}"))?;
         }
+
+        // DirectML EPはRealCUGANモデルの計算結果が崩れる（紫色化）ため、DirectMLビルドでも
+        // Upscale推論自体はCPU EPにフォールバックする（EPを追加しなければ既定でCPU実行になる）。
 
         let session = builder.commit_from_file(&model_path).map_err(|e| format!("Load model: {e}"))?;
         sessions.insert(cache_key.clone(), session);
@@ -1098,7 +1107,8 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             load_settings,
             save_settings,
             upscale_image,
-            download_ncnn_vulkan
+            download_ncnn_vulkan,
+            get_active_ep
         ])
         .build(context)
         .expect("error while building tauri application")
