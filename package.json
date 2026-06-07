@@ -10,6 +10,10 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
     "tauri": "tauri",
+    "tauri:dev:cuda": "tauri dev",
+    "tauri:dev:directml": "tauri dev -- --no-default-features --features directml-ep",
+    "tauri:build:cuda": "tauri build",
+    "tauri:build:directml": "tauri build -- --no-default-features --features directml-ep",
     "version": "node update-version.cjs"
   },
   "license": "MIT",
