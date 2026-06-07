@@ -53,7 +53,8 @@
   export let toggleFullscreen: () => void;
   export let upscaleCurrentImage: (scale: 2 | 4) => Promise<void>;
   export let isUpscaling: boolean;
-  export let upscaleProvider: "cpu" | "cuda" | "vulkan";
+  export let upscaleProvider: "cpu" | "gpu" | "vulkan";
+  export let activeEp: string;
   export let toggleUpscaleProvider: () => void;
   export let revertToOriginal: () => void;
   export let sessionOffset: number;
@@ -446,7 +447,7 @@
             }}
             role="menuitem"
           >
-            Inference: {upscaleProvider === "cuda" ? "GPU (CUDA)" : upscaleProvider === "vulkan" ? "GPU (Vulkan)" : "CPU"}
+            Inference: {upscaleProvider === "vulkan" ? "GPU (Vulkan)" : upscaleProvider === "gpu" ? `GPU (${activeEp})` : "CPU"}
           </button>
           {#if currentItem?.originalPath}
             <button

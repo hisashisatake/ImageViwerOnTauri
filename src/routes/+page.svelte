@@ -30,7 +30,8 @@
   let fileInput = $state<HTMLInputElement | null>(null);
   let isLoading = $state(false);
   let isUpscaling = $state(false);
-  let upscaleProvider = $state<"cpu" | "cuda" | "vulkan">("cpu");
+  let upscaleProvider = $state<"cpu" | "gpu" | "vulkan">("cpu");
+  let activeEp = $state("CPU");
   let statusMessage = $state("");
   let errorMessage = $state("");
   let dragCounter = 0;
@@ -124,7 +125,7 @@
       if (data.fitToWindow != null) {
         fitToWindow = data.fitToWindow === "true";
       }
-      if (data.upscaleProvider === "cuda" || data.upscaleProvider === "vulkan") {
+      if (data.upscaleProvider === "gpu" || data.upscaleProvider === "vulkan") {
         upscaleProvider = data.upscaleProvider;
       }
       if (data.zoom != null) {
@@ -515,8 +516,13 @@
   }
 
   function toggleUpscaleProvider() {
-    if (upscaleProvider === "cpu") upscaleProvider = "cuda";
-    else if (upscaleProvider === "cuda") upscaleProvider = "vulkan";
+    if (activeEp === "DirectML") {
+      // DirectMLビルドではGPU(DirectML)を選択肢から除外し、CPU/Vulkanのみを切り替える
+      upscaleProvider = upscaleProvider === "cpu" ? "vulkan" : "cpu";
+      return;
+    }
+    if (upscaleProvider === "cpu") upscaleProvider = "gpu";
+    else if (upscaleProvider === "gpu") upscaleProvider = "vulkan";
     else upscaleProvider = "cpu";
   }
 
@@ -874,7 +880,16 @@
 
 
   onMount(() => {
-    void loadSettings();
+    void Promise.all([
+      invoke<string>("get_active_ep").then((ep) => { activeEp = ep; }),
+      loadSettings(),
+    ]).then(() => {
+      // DirectMLは紫色化バグのためUpscaleにはCPUで処理しており、
+      // GPU(DirectML)選択肢はDirectMLビルドでは無効化する
+      if (activeEp === "DirectML" && upscaleProvider === "gpu") {
+        upscaleProvider = "cpu";
+      }
+    });
     const preventDefaults = (event: DragEvent) => {
       event.preventDefault();
     };
@@ -962,6 +977,7 @@
   {toggleFullscreen}
   {upscaleCurrentImage}
   {upscaleProvider}
+  {activeEp}
   {toggleUpscaleProvider}
   {revertToOriginal}
   {sessionOffset}
