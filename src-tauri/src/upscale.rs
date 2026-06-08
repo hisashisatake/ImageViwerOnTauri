@@ -1,3 +1,7 @@
+mod model;
+mod real_cugan;
+
+use model::UpscaleModel;
 use ort::{session::Session, value::Tensor as OrtTensor};
 use serde::Serialize;
 use std::{
@@ -9,6 +13,8 @@ use std::{
 };
 use tauri::{command, AppHandle, Manager, State};
 use zip::ZipArchive;
+
+use real_cugan::RealCugan;
 
 // ONNXセッションはモデル重み＋実行プロバイダの内部バッファを保持するため1つあたり
 // 数百MB級のメモリを占有しうる。無制限にキャッシュすると倍率/プロバイダの組み合わせを
@@ -120,6 +126,8 @@ pub fn upscale_image(
         return upscale_via_ncnn(&app, &input_path, scale);
     }
 
+    let model: &dyn UpscaleModel = &RealCugan;
+
     let cache_key = (scale, provider.clone());
     let mut sessions = cache.sessions.lock().map_err(|_| "Failed to lock session cache".to_string())?;
 
@@ -128,7 +136,7 @@ pub fn upscale_image(
         let entry = sessions.remove(pos);
         sessions.push(entry);
     } else {
-        let model_file = match scale { 4 => "realcugan_4x_conservative.onnx", _ => "realcugan_2x_conservative.onnx" };
+        let model_file = model.model_file(scale);
         let model_path = app.path().resource_dir().map_err(|e| format!("resource_dir: {e}"))?.join(model_file);
         if !model_path.exists() { return Err(format!("Model not found: {}", model_path.display())); }
 
@@ -180,41 +188,15 @@ pub fn upscale_image(
 
             let tile_h = ey1 - ey0;
             let tile_w = ex1 - ex0;
-            let pad_h = (tile_h + 1) & !1;
-            let pad_w = (tile_w + 1) & !1;
 
-            let mut data = vec![0f32; 3 * pad_h * pad_w];
-            for ty in 0..tile_h {
-                for tx in 0..tile_w {
-                    let p = img.get_pixel((ex0 + tx) as u32, (ey0 + ty) as u32);
-                    data[0 * pad_h * pad_w + ty * pad_w + tx] = p[0] as f32 / 255.0;
-                    data[1 * pad_h * pad_w + ty * pad_w + tx] = p[1] as f32 / 255.0;
-                    data[2 * pad_h * pad_w + ty * pad_w + tx] = p[2] as f32 / 255.0;
-                }
-            }
-            if tile_w < pad_w {
-                for ty in 0..tile_h {
-                    for c in 0..3usize {
-                        data[c * pad_h * pad_w + ty * pad_w + tile_w] =
-                            data[c * pad_h * pad_w + ty * pad_w + tile_w - 1];
-                    }
-                }
-            }
-            if tile_h < pad_h {
-                for tx in 0..pad_w {
-                    for c in 0..3usize {
-                        data[c * pad_h * pad_w + tile_h * pad_w + tx] =
-                            data[c * pad_h * pad_w + (tile_h - 1) * pad_w + tx];
-                    }
-                }
-            }
+            let (data, pad_w, pad_h) = model.encode_region(&img, ex0, ey0, tile_w, tile_h);
 
             let tensor = OrtTensor::<f32>::from_array(([1usize, 3, pad_h, pad_w], data))
                 .map_err(|e| format!("Create tensor: {e}"))?;
 
-            let outputs = session.run(ort::inputs!["input" => tensor]).map_err(|e| format!("Inference: {e}"))?;
+            let outputs = session.run(ort::inputs![model.input_name() => tensor]).map_err(|e| format!("Inference: {e}"))?;
 
-            let (out_shape, out_data) = outputs["output"].try_extract_tensor::<f32>()
+            let (out_shape, out_data) = outputs[model.output_name()].try_extract_tensor::<f32>()
                 .map_err(|e| format!("Extract output: {e}"))?;
 
             let out_h_total = out_shape[2] as usize;
@@ -230,13 +212,11 @@ pub fn upscale_image(
                 for cx in 0..crop_w {
                     let sy = crop_top + cy;
                     let sx = crop_left + cx;
-                    let r = (out_data[sy * out_w_total + sx] * 255.0).round().clamp(0.0, 255.0) as u8;
-                    let g = (out_data[out_h_total * out_w_total + sy * out_w_total + sx] * 255.0).round().clamp(0.0, 255.0) as u8;
-                    let b = (out_data[2 * out_h_total * out_w_total + sy * out_w_total + sx] * 255.0).round().clamp(0.0, 255.0) as u8;
+                    let pixel = model.decode_pixel(out_data, out_h_total, out_w_total, sx, sy);
                     out_img.put_pixel(
                         (x0 * scale_usize + cx) as u32,
                         (y0 * scale_usize + cy) as u32,
-                        image::Rgb([r, g, b]),
+                        pixel,
                     );
                 }
             }
