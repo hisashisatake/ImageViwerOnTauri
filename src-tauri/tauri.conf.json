@@ -30,7 +30,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "resources": ["realcugan_2x_conservative.onnx", "realcugan_4x_conservative.onnx"],
+    "resources": ["realcugan_2x_conservative.onnx", "realcugan_4x_conservative.onnx", "descreenton_vl4.onnx", "descreenton_vh4.onnx"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

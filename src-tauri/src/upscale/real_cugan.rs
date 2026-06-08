@@ -13,8 +13,16 @@ impl UpscaleModel for RealCugan {
         }
     }
 
+    fn output_scale(&self, scale: u32) -> u32 { scale }
+
     fn input_name(&self) -> &'static str { "input" }
     fn output_name(&self) -> &'static str { "output" }
+
+    // 画像全体を一括推論するとメモリ消費が解像度の2乗に比例して膨らむため、
+    // タイル単位で推論する。オーバーラップはモデル内部のreflectパディング
+    // (18-19px)による継ぎ目を吸収するためのマージン。
+    fn tile_size(&self) -> usize { 256 }
+    fn tile_overlap(&self) -> usize { 32 }
 
     fn encode_region(
         &self,

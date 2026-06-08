@@ -1,3 +1,4 @@
+mod descreenton;
 mod model;
 mod real_cugan;
 
@@ -14,6 +15,7 @@ use std::{
 use tauri::{command, AppHandle, Manager, State};
 use zip::ZipArchive;
 
+use descreenton::{Descreenton, DescreentonVariant};
 use real_cugan::RealCugan;
 
 // ONNXセッションはモデル重み＋実行プロバイダの内部バッファを保持するため1つあたり
@@ -21,16 +23,21 @@ use real_cugan::RealCugan;
 // 切り替えるたびに積み上がってしまうため、LRU方式で最大保持数を制限する。
 const MAX_CACHED_SESSIONS: usize = 2;
 
-// 画像全体を一括推論するとメモリ消費が解像度の2乗に比例して膨らむため、タイル単位で
-// 推論して継ぎ合わせる。TILE_OVERLAPはモデル内部のreflectパディング(18-19px)による
-// 継ぎ目を吸収するためのマージン(これより大きくしておけば縫い目が出にくい)。
-const TILE_SIZE: usize = 256;
-const TILE_OVERLAP: usize = 32;
-
 #[derive(Default)]
 pub struct UpscaleSessionCache {
     // 末尾ほど最近使われたセッション（LRU）。Vecの線形探索で十分な規模(最大数件)。
-    sessions: Mutex<Vec<((u32, String), Session)>>,
+    // キーにモデル名を含めることで、モデルを切り替えてもLRUとして機能する。
+    sessions: Mutex<Vec<((String, u32, String), Session)>>,
+}
+
+/// フロントエンドから渡される `model` パラメータに対応するプラグインを選択する。
+fn select_model(name: &str) -> Result<Box<dyn UpscaleModel>, String> {
+    match name {
+        "real_cugan" => Ok(Box::new(RealCugan)),
+        "descreenton_vl4" => Ok(Box::new(Descreenton(DescreentonVariant::Vl4))),
+        "descreenton_vh4" => Ok(Box::new(Descreenton(DescreentonVariant::Vh4))),
+        _ => Err(format!("Unknown upscale model: {name}")),
+    }
 }
 
 #[derive(Serialize)]
@@ -121,14 +128,21 @@ pub fn upscale_image(
     input_path: String,
     scale: u32,
     provider: String,
+    model: String,
 ) -> Result<UpscaleResult, String> {
     if provider == "vulkan" {
+        // Vulkan版はrealcugan-ncnn-vulkanバイナリに固定されているため、RealCUGAN以外の
+        // モデルでは選択できない(descreentonなどはONNXセッション経由のCPU/GPU実行のみ)。
+        if model != "real_cugan" {
+            return Err(format!("Vulkan provider only supports the real_cugan model (got: {model})"));
+        }
         return upscale_via_ncnn(&app, &input_path, scale);
     }
 
-    let model: &dyn UpscaleModel = &RealCugan;
+    let model = select_model(&model)?;
+    let model = model.as_ref();
 
-    let cache_key = (scale, provider.clone());
+    let cache_key = (model.model_file(scale).to_string(), scale, provider.clone());
     let mut sessions = cache.sessions.lock().map_err(|_| "Failed to lock session cache".to_string())?;
 
     if let Some(pos) = sessions.iter().position(|(k, _)| *k == cache_key) {
@@ -136,8 +150,7 @@ pub fn upscale_image(
         let entry = sessions.remove(pos);
         sessions.push(entry);
     } else {
-        let model_file = model.model_file(scale);
-        let model_path = app.path().resource_dir().map_err(|e| format!("resource_dir: {e}"))?.join(model_file);
+        let model_path = app.path().resource_dir().map_err(|e| format!("resource_dir: {e}"))?.join(&cache_key.0);
         if !model_path.exists() { return Err(format!("Model not found: {}", model_path.display())); }
 
         let num_threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
@@ -166,25 +179,29 @@ pub fn upscale_image(
     let (orig_w, orig_h) = img.dimensions();
     let orig_w = orig_w as usize;
     let orig_h = orig_h as usize;
-    let scale_usize = scale as usize;
+    // descreentonのように倍率が固定のモデルでは、要求された scale と実際の出力倍率が
+    // 異なりうる。クロップ位置や出力サイズは必ず実際の出力倍率に合わせて計算する。
+    let scale_usize = model.output_scale(scale) as usize;
 
     let mut out_img = image::RgbImage::new((orig_w * scale_usize) as u32, (orig_h * scale_usize) as u32);
 
     // 画像全体を一括推論せず、オーバーラップ付きのタイル単位で推論して継ぎ合わせる。
-    // オーバーラップ部分は推論後に切り捨てることで、モデル内部のreflectパディングに
-    // 起因するタイル境界の継ぎ目を防ぐ。
+    // オーバーラップ部分は推論後に切り捨てることで、モデル内部のパディングに
+    // 起因するタイル境界の継ぎ目を防ぐ。サイズはモデルごとの制約に合わせて選ぶ。
+    let tile_size = model.tile_size();
+    let tile_overlap = model.tile_overlap();
     let mut y0 = 0usize;
     while y0 < orig_h {
-        let y1 = (y0 + TILE_SIZE).min(orig_h);
+        let y1 = (y0 + tile_size).min(orig_h);
         let mut x0 = 0usize;
         while x0 < orig_w {
-            let x1 = (x0 + TILE_SIZE).min(orig_w);
+            let x1 = (x0 + tile_size).min(orig_w);
 
             // オーバーラップを含む拡張領域(画像の端ではクランプ)
-            let ey0 = y0.saturating_sub(TILE_OVERLAP);
-            let ey1 = (y1 + TILE_OVERLAP).min(orig_h);
-            let ex0 = x0.saturating_sub(TILE_OVERLAP);
-            let ex1 = (x1 + TILE_OVERLAP).min(orig_w);
+            let ey0 = y0.saturating_sub(tile_overlap);
+            let ey1 = (y1 + tile_overlap).min(orig_h);
+            let ex0 = x0.saturating_sub(tile_overlap);
+            let ex1 = (x1 + tile_overlap).min(orig_w);
 
             let tile_h = ey1 - ey0;
             let tile_w = ex1 - ex0;
