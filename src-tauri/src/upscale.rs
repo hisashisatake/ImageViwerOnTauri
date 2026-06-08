@@ -15,6 +15,12 @@ use zip::ZipArchive;
 // 切り替えるたびに積み上がってしまうため、LRU方式で最大保持数を制限する。
 const MAX_CACHED_SESSIONS: usize = 2;
 
+// 画像全体を一括推論するとメモリ消費が解像度の2乗に比例して膨らむため、タイル単位で
+// 推論して継ぎ合わせる。TILE_OVERLAPはモデル内部のreflectパディング(18-19px)による
+// 継ぎ目を吸収するためのマージン(これより大きくしておけば縫い目が出にくい)。
+const TILE_SIZE: usize = 256;
+const TILE_OVERLAP: usize = 32;
+
 #[derive(Default)]
 pub struct UpscaleSessionCache {
     // 末尾ほど最近使われたセッション（LRU）。Vecの線形探索で十分な規模(最大数件)。
@@ -150,55 +156,94 @@ pub fn upscale_image(
 
     let img = image::open(&input_path).map_err(|e| format!("Cannot open image: {e}"))?.into_rgb8();
     let (orig_w, orig_h) = img.dimensions();
-    let pad_h = ((orig_h + 1) & !1) as usize;
-    let pad_w = ((orig_w + 1) & !1) as usize;
+    let orig_w = orig_w as usize;
+    let orig_h = orig_h as usize;
+    let scale_usize = scale as usize;
 
-    let mut data = vec![0f32; 3 * pad_h * pad_w];
-    for y in 0..orig_h as usize {
-        for x in 0..orig_w as usize {
-            let p = img.get_pixel(x as u32, y as u32);
-            data[0 * pad_h * pad_w + y * pad_w + x] = p[0] as f32 / 255.0;
-            data[1 * pad_h * pad_w + y * pad_w + x] = p[1] as f32 / 255.0;
-            data[2 * pad_h * pad_w + y * pad_w + x] = p[2] as f32 / 255.0;
-        }
-    }
-    if (orig_w as usize) < pad_w {
-        for y in 0..orig_h as usize {
-            for c in 0..3usize {
-                data[c * pad_h * pad_w + y * pad_w + orig_w as usize] =
-                    data[c * pad_h * pad_w + y * pad_w + orig_w as usize - 1];
+    let mut out_img = image::RgbImage::new((orig_w * scale_usize) as u32, (orig_h * scale_usize) as u32);
+
+    // 画像全体を一括推論せず、オーバーラップ付きのタイル単位で推論して継ぎ合わせる。
+    // オーバーラップ部分は推論後に切り捨てることで、モデル内部のreflectパディングに
+    // 起因するタイル境界の継ぎ目を防ぐ。
+    let mut y0 = 0usize;
+    while y0 < orig_h {
+        let y1 = (y0 + TILE_SIZE).min(orig_h);
+        let mut x0 = 0usize;
+        while x0 < orig_w {
+            let x1 = (x0 + TILE_SIZE).min(orig_w);
+
+            // オーバーラップを含む拡張領域(画像の端ではクランプ)
+            let ey0 = y0.saturating_sub(TILE_OVERLAP);
+            let ey1 = (y1 + TILE_OVERLAP).min(orig_h);
+            let ex0 = x0.saturating_sub(TILE_OVERLAP);
+            let ex1 = (x1 + TILE_OVERLAP).min(orig_w);
+
+            let tile_h = ey1 - ey0;
+            let tile_w = ex1 - ex0;
+            let pad_h = (tile_h + 1) & !1;
+            let pad_w = (tile_w + 1) & !1;
+
+            let mut data = vec![0f32; 3 * pad_h * pad_w];
+            for ty in 0..tile_h {
+                for tx in 0..tile_w {
+                    let p = img.get_pixel((ex0 + tx) as u32, (ey0 + ty) as u32);
+                    data[0 * pad_h * pad_w + ty * pad_w + tx] = p[0] as f32 / 255.0;
+                    data[1 * pad_h * pad_w + ty * pad_w + tx] = p[1] as f32 / 255.0;
+                    data[2 * pad_h * pad_w + ty * pad_w + tx] = p[2] as f32 / 255.0;
+                }
             }
-        }
-    }
-    if (orig_h as usize) < pad_h {
-        for x in 0..pad_w {
-            for c in 0..3usize {
-                data[c * pad_h * pad_w + orig_h as usize * pad_w + x] =
-                    data[c * pad_h * pad_w + (orig_h as usize - 1) * pad_w + x];
+            if tile_w < pad_w {
+                for ty in 0..tile_h {
+                    for c in 0..3usize {
+                        data[c * pad_h * pad_w + ty * pad_w + tile_w] =
+                            data[c * pad_h * pad_w + ty * pad_w + tile_w - 1];
+                    }
+                }
             }
+            if tile_h < pad_h {
+                for tx in 0..pad_w {
+                    for c in 0..3usize {
+                        data[c * pad_h * pad_w + tile_h * pad_w + tx] =
+                            data[c * pad_h * pad_w + (tile_h - 1) * pad_w + tx];
+                    }
+                }
+            }
+
+            let tensor = OrtTensor::<f32>::from_array(([1usize, 3, pad_h, pad_w], data))
+                .map_err(|e| format!("Create tensor: {e}"))?;
+
+            let outputs = session.run(ort::inputs!["input" => tensor]).map_err(|e| format!("Inference: {e}"))?;
+
+            let (out_shape, out_data) = outputs["output"].try_extract_tensor::<f32>()
+                .map_err(|e| format!("Extract output: {e}"))?;
+
+            let out_h_total = out_shape[2] as usize;
+            let out_w_total = out_shape[3] as usize;
+
+            // 拡張領域のうち、本来のタイル(コア領域)に対応する部分だけを切り出して書き込む
+            let crop_top = (y0 - ey0) * scale_usize;
+            let crop_left = (x0 - ex0) * scale_usize;
+            let crop_h = (y1 - y0) * scale_usize;
+            let crop_w = (x1 - x0) * scale_usize;
+
+            for cy in 0..crop_h {
+                for cx in 0..crop_w {
+                    let sy = crop_top + cy;
+                    let sx = crop_left + cx;
+                    let r = (out_data[sy * out_w_total + sx] * 255.0).round().clamp(0.0, 255.0) as u8;
+                    let g = (out_data[out_h_total * out_w_total + sy * out_w_total + sx] * 255.0).round().clamp(0.0, 255.0) as u8;
+                    let b = (out_data[2 * out_h_total * out_w_total + sy * out_w_total + sx] * 255.0).round().clamp(0.0, 255.0) as u8;
+                    out_img.put_pixel(
+                        (x0 * scale_usize + cx) as u32,
+                        (y0 * scale_usize + cy) as u32,
+                        image::Rgb([r, g, b]),
+                    );
+                }
+            }
+
+            x0 = x1;
         }
-    }
-
-    let tensor = OrtTensor::<f32>::from_array(([1usize, 3, pad_h, pad_w], data))
-        .map_err(|e| format!("Create tensor: {e}"))?;
-
-    let outputs = session.run(ort::inputs!["input" => tensor]).map_err(|e| format!("Inference: {e}"))?;
-
-    let (out_shape, out_data) = outputs["output"].try_extract_tensor::<f32>()
-        .map_err(|e| format!("Extract output: {e}"))?;
-
-    let out_h_total = out_shape[2] as usize;
-    let out_w_total = out_shape[3] as usize;
-    let out_h = (orig_h * scale) as usize;
-    let out_w = (orig_w * scale) as usize;
-    let mut out_img = image::RgbImage::new(out_w as u32, out_h as u32);
-    for y in 0..out_h {
-        for x in 0..out_w {
-            let r = (out_data[y * out_w_total + x] * 255.0).round().clamp(0.0, 255.0) as u8;
-            let g = (out_data[out_h_total * out_w_total + y * out_w_total + x] * 255.0).round().clamp(0.0, 255.0) as u8;
-            let b = (out_data[2 * out_h_total * out_w_total + y * out_w_total + x] * 255.0).round().clamp(0.0, 255.0) as u8;
-            out_img.put_pixel(x as u32, y as u32, image::Rgb([r, g, b]));
-        }
+        y0 = y1;
     }
 
     let temp_dir = std::env::temp_dir().join("viewer-on-tauri").join("upscaled");
