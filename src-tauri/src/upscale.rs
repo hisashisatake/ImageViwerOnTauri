@@ -1,7 +1,6 @@
 use ort::{session::Session, value::Tensor as OrtTensor};
 use serde::Serialize;
 use std::{
-    collections::HashMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -11,9 +10,15 @@ use std::{
 use tauri::{command, AppHandle, Manager, State};
 use zip::ZipArchive;
 
+// ONNXセッションはモデル重み＋実行プロバイダの内部バッファを保持するため1つあたり
+// 数百MB級のメモリを占有しうる。無制限にキャッシュすると倍率/プロバイダの組み合わせを
+// 切り替えるたびに積み上がってしまうため、LRU方式で最大保持数を制限する。
+const MAX_CACHED_SESSIONS: usize = 2;
+
 #[derive(Default)]
 pub struct UpscaleSessionCache {
-    sessions: Mutex<HashMap<(u32, String), Session>>,
+    // 末尾ほど最近使われたセッション（LRU）。Vecの線形探索で十分な規模(最大数件)。
+    sessions: Mutex<Vec<((u32, String), Session)>>,
 }
 
 #[derive(Serialize)]
@@ -112,7 +117,11 @@ pub fn upscale_image(
     let cache_key = (scale, provider.clone());
     let mut sessions = cache.sessions.lock().map_err(|_| "Failed to lock session cache".to_string())?;
 
-    if !sessions.contains_key(&cache_key) {
+    if let Some(pos) = sessions.iter().position(|(k, _)| *k == cache_key) {
+        // 最近使われたものとして末尾に移動する(LRU更新)
+        let entry = sessions.remove(pos);
+        sessions.push(entry);
+    } else {
         let model_file = match scale { 4 => "realcugan_4x_conservative.onnx", _ => "realcugan_2x_conservative.onnx" };
         let model_path = app.path().resource_dir().map_err(|e| format!("resource_dir: {e}"))?.join(model_file);
         if !model_path.exists() { return Err(format!("Model not found: {}", model_path.display())); }
@@ -130,10 +139,14 @@ pub fn upscale_image(
         // Upscale推論自体はCPU EPにフォールバックする（EPを追加しなければ既定でCPU実行になる）。
 
         let session = builder.commit_from_file(&model_path).map_err(|e| format!("Load model: {e}"))?;
-        sessions.insert(cache_key.clone(), session);
+        sessions.push((cache_key.clone(), session));
+        // 上限を超えた分は最も使われていないもの(先頭)から破棄する
+        while sessions.len() > MAX_CACHED_SESSIONS {
+            sessions.remove(0);
+        }
     }
 
-    let session = sessions.get_mut(&cache_key).ok_or("Session not found in cache")?;
+    let (_, session) = sessions.last_mut().ok_or("Session not found in cache")?;
 
     let img = image::open(&input_path).map_err(|e| format!("Cannot open image: {e}"))?.into_rgb8();
     let (orig_w, orig_h) = img.dimensions();
