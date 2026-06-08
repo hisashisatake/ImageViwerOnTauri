@@ -31,6 +31,9 @@
   let isLoading = $state(false);
   let isUpscaling = $state(false);
   let upscaleProvider = $state<"cpu" | "gpu" | "vulkan">("cpu");
+  // settings.iniの[viewer] upscaleModelで切り替え可能(real_cugan / descreenton_vl4 / descreenton_vh4)。
+  // UIでの選択はまだ未実装のため、設定ファイル経由でのみ変更できる。
+  let upscaleModel = $state<"real_cugan" | "descreenton_vl4" | "descreenton_vh4">("real_cugan");
   let activeEp = $state("CPU");
   let statusMessage = $state("");
   let errorMessage = $state("");
@@ -128,6 +131,14 @@
       if (data.upscaleProvider === "gpu" || data.upscaleProvider === "vulkan") {
         upscaleProvider = data.upscaleProvider;
       }
+      if (data.upscaleModel === "real_cugan" || data.upscaleModel === "descreenton_vl4" || data.upscaleModel === "descreenton_vh4") {
+        upscaleModel = data.upscaleModel;
+      }
+      // Vulkan(ncnn)はreal_cugan専用のため、descreenton系モデルと組み合わせて
+      // 保存されていた場合はCPU実行にフォールバックする
+      if (upscaleProvider === "vulkan" && upscaleModel !== "real_cugan") {
+        upscaleProvider = "cpu";
+      }
       if (data.zoom != null) {
         const parsed = Number(data.zoom);
         if (Number.isFinite(parsed)) {
@@ -149,6 +160,7 @@
       fitToWindow,
       zoom: fitToWindow ? null : zoom,
       upscaleProvider,
+      upscaleModel,
     };
   }
 
@@ -166,6 +178,7 @@
         `fitToWindow=${fitToWindow}`,
         `zoom=${zoom}`,
         `upscaleProvider=${upscaleProvider}`,
+        `upscaleModel=${upscaleModel}`,
       ];
       await invoke("save_settings", { contents: lines.join("\n") });
       lastSavedSnapshot = snapshot;
@@ -516,13 +529,16 @@
   }
 
   function toggleUpscaleProvider() {
+    // VulkanはrealcuganのONNXとは別系統のncnnバイナリに固定されているため、
+    // descreenton系モデルでは選択肢から除外する
+    const vulkanAvailable = upscaleModel === "real_cugan";
     if (activeEp === "DirectML") {
       // DirectMLビルドではGPU(DirectML)を選択肢から除外し、CPU/Vulkanのみを切り替える
-      upscaleProvider = upscaleProvider === "cpu" ? "vulkan" : "cpu";
+      upscaleProvider = vulkanAvailable && upscaleProvider !== "vulkan" ? "vulkan" : "cpu";
       return;
     }
     if (upscaleProvider === "cpu") upscaleProvider = "gpu";
-    else if (upscaleProvider === "gpu") upscaleProvider = "vulkan";
+    else if (upscaleProvider === "gpu") upscaleProvider = vulkanAvailable ? "vulkan" : "cpu";
     else upscaleProvider = "cpu";
   }
 
@@ -547,7 +563,7 @@
         return fileName.replace(/\.[^.]+$/, "") + suffix;
       }
 
-      const result = await invoke<{ path: string; size: number }>("upscale_image", { inputPath, scale, provider: upscaleProvider });
+      const result = await invoke<{ path: string; size: number }>("upscale_image", { inputPath, scale, provider: upscaleProvider, model: upscaleModel });
       newImages[currentIndex] = {
         name: nameFromOriginal(originalPath),
         url: convertFileSrc(result.path),
@@ -565,7 +581,7 @@
       if (secondItem && secondInputPath) {
         const secondOriginalPath = secondItem.originalPath ?? secondItem.path!;
         const secondOriginalSize = secondItem.originalSize ?? secondItem.size;
-        const result2 = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: secondInputPath, scale, provider: upscaleProvider });
+        const result2 = await invoke<{ path: string; size: number }>("upscale_image", { inputPath: secondInputPath, scale, provider: upscaleProvider, model: upscaleModel });
         newImages[currentIndex + 1] = {
           name: nameFromOriginal(secondOriginalPath),
           url: convertFileSrc(result2.path),
